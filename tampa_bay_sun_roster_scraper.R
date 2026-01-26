@@ -203,10 +203,11 @@ write_roster_to_db <- function(roster_data) {
     row.names = FALSE
   )
 
-  # Verify the write
+  current_datetime <- min(roster_with_timestamps$ao_datetime)
   row_count <- dbGetQuery(
     conn,
-    "SELECT COUNT(*) as count FROM tb_sun.public.roster"
+    "SELECT COUNT(*) as count FROM roster WHERE ao_datetime = $1",
+    params = list(current_datetime)
   )$count
 
   cat(
@@ -214,6 +215,11 @@ write_roster_to_db <- function(roster_data) {
     as.integer(row_count),
     "rows to tb_sun.public.roster\n"
   )
+
+  # Detect roster changes (adds/removes) and store in roster_events
+  cat("Detecting roster changes...\n")
+  dbExecute(conn, "SELECT detect_roster_changes()")
+  cat("Roster change detection completed\n")
 
   return(row_count)
 }
