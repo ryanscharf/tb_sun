@@ -33,7 +33,7 @@ email_config <- list(
   username = Sys.getenv("EMAIL_USERNAME"),
   password = Sys.getenv("EMAIL_PASSWORD"),
   use_ssl = as.logical(Sys.getenv("EMAIL_USE_SSL", "TRUE")),
-  send_success = as.logical(Sys.getenv("EMAIL_SEND_SUCCESS", "FALSE"))
+  send_success = as.logical(Sys.getenv("EMAIL_SEND_SUCCESS"))
 )
 
 Sys.setenv(EMAIL_PASSWORD = email_config$password)
