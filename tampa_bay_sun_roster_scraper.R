@@ -196,7 +196,7 @@ write_roster_to_db <- function(roster_data) {
   # Write the table (append or overwrite based on preference)
   dbWriteTable(
     conn,
-    name = Id(schema = "tb_sun", table = "roster"),
+    name = "roster",
     value = roster_with_timestamps,
     overwrite = FALSE, # Change to FALSE if you want to append instead
     row.names = FALSE
@@ -268,7 +268,7 @@ tryCatch(
                 "SUCCESS: Tampa Bay Sun FC Roster Scraper - ",
                 format(Sys.time(), "%Y-%m-%d %H:%M")
               ),
-              credentials = creds(
+              credentials = creds_envvars(
                 user = email_config$username,
                 password = email_config$password,
                 host = email_config$smtp_host,
