@@ -205,10 +205,10 @@ write_roster_to_db <- function(roster_data) {
   # Verify the write
   row_count <- dbGetQuery(
     conn,
-    "SELECT COUNT(*) as count FROM tb_sun.roster"
+    "SELECT COUNT(*) as count FROM tb_sun.public.roster"
   )$count
 
-  cat("Successfully wrote", row_count, "rows to tb_sun.roster\n")
+  cat("Successfully wrote", row_count, "rows to tb_sun.public.roster\n")
 
   return(row_count)
 }
