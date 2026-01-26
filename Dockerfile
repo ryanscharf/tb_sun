@@ -35,7 +35,7 @@ COPY startup.sh /startup.sh
 
 # Make scripts executable
 RUN chmod +x /docker-entrypoint.sh && \
-    chmod +x /home/r-environment/run_scraper.sh \
+    chmod +x /home/r-environment/run_scraper.sh && \
     chmod +x /startup.sh
 
 # Create cron job to run at 3 AM Eastern Time daily
