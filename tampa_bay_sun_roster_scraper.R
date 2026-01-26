@@ -199,6 +199,7 @@ write_roster_to_db <- function(roster_data) {
     name = "roster",
     value = roster_with_timestamps,
     overwrite = FALSE, # Change to FALSE if you want to append instead
+    append = T,
     row.names = FALSE
   )
 
