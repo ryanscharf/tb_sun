@@ -9,6 +9,7 @@ on:
       - 'Dockerfile'
       - 'docker-entrypoint.sh'
       - 'run_scraper.sh'
+      - 'startup.sh'
       - '.github/workflows/docker-build.yml'
   workflow_dispatch:  # Allows manual trigger
 
