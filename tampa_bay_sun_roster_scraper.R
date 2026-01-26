@@ -209,7 +209,11 @@ write_roster_to_db <- function(roster_data) {
     "SELECT COUNT(*) as count FROM tb_sun.public.roster"
   )$count
 
-  cat("Successfully wrote", row_count, "rows to tb_sun.public.roster\n")
+  cat(
+    "Successfully wrote",
+    as.integer(row_count),
+    "rows to tb_sun.public.roster\n"
+  )
 
   return(row_count)
 }
@@ -269,7 +273,7 @@ tryCatch(
                 "SUCCESS: Tampa Bay Sun FC Roster Scraper - ",
                 format(Sys.time(), "%Y-%m-%d %H:%M")
               ),
-              credentials = creds_envvars(
+              credentials = creds_envvar(
                 user = email_config$username,
                 password = email_config$password,
                 host = email_config$smtp_host,
