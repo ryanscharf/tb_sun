@@ -39,7 +39,7 @@ RUN chmod +x /docker-entrypoint.sh && \
     chmod +x /startup.sh
 
 # Create cron job to run at 3 AM Eastern Time daily
-RUN echo "0 3 * * * /home/r-environment/run_scraper.sh >> /var/log/cron.log 2>&1" > /etc/cron.d/scraper-cron && \
+RUN echo "0 * * * * /home/r-environment/run_scraper.sh >> /var/log/cron.log 2>&1" > /etc/cron.d/scraper-cron && \
     chmod 0644 /etc/cron.d/scraper-cron && \
     crontab /etc/cron.d/scraper-cron
 
