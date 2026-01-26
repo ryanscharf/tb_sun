@@ -88,9 +88,9 @@ send_error_email <- function(
             " - ",
             format(Sys.time(), "%Y-%m-%d %H:%M")
           ),
-          credentials = creds(
+          credentials = creds_envvar(
             user = email_config$username,
-            password = email_config$password,
+            pass_envvar = "EMAIL_PASSWORD",
             host = email_config$smtp_host,
             port = email_config$smtp_port,
             use_ssl = email_config$use_ssl
