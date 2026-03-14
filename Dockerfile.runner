@@ -2,12 +2,14 @@ FROM rocker/r-base
 
 ENV TZ=America/New_York
 
-RUN apt-get update -qq && apt-get install -y \
+RUN apt-get update && apt-get install -y \
     cron \
     git \
     libpq-dev \
     libssl-dev \
     libxml2-dev \
+    libcurl4t64 \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN R -e "install.packages('pak', repos='https://cloud.r-project.org/')"
