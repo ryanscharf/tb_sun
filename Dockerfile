@@ -4,20 +4,13 @@ FROM rocker/r-base
 ENV TZ=America/New_York
 
 # Install system dependencies
-RUN apt update -qq && apt install -y \
+RUN apt-get update && apt-get install -y \
     cron \
     git \
     libpq-dev \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
-    libfontconfig1-dev \
-    libharfbuzz-dev \
-    libfribidi-dev \
-    libfreetype6-dev \
-    libpng-dev \
-    libtiff-dev \
-    libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pak using the simpler method
