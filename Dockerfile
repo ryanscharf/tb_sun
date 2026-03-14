@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libssl-dev \
     libxml2-dev \
+    libcurl4t64 \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pak using the simpler method
