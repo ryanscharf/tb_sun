@@ -31,6 +31,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Rendered docs
+*.html
+*_files/
+
 # Editor backup files
 *~
 *.swp
