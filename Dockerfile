@@ -1,5 +1,5 @@
 # Base R image
-FROM rocker/r-base
+FROM rocker/r-ver:4.5.3
 
 ENV TZ=America/New_York
 
