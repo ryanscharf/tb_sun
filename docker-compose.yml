@@ -1,0 +1,49 @@
+services:
+  tb_sun:
+    image: ghcr.io/ryanscharf/tb_sun:latest
+    container_name: tb_sun
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+      # Database
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_MIN_SIZE=${DB_MIN_SIZE}
+      - DB_IDLE_TIMEOUT=${DB_IDLE_TIMEOUT}
+      # Email
+      - EMAIL_FROM=${EMAIL_FROM}
+      - EMAIL_TO=${EMAIL_TO}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT}
+      - EMAIL_USERNAME=${EMAIL_USERNAME}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - EMAIL_USE_SSL=${EMAIL_USE_SSL}
+      - EMAIL_SEND_SUCCESS=${EMAIL_SEND_SUCCESS}
+      # startup run?
+      - RUN_ON_STARTUP=${RUN_ON_STARTUP:-false}
+    networks:
+      - tb_sun-network
+
+  playoff-runner:
+    image: ghcr.io/ryanscharf/tb_sun-playoff-runner:latest
+    container_name: playoff-runner
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - N_SIMS=${N_SIMS:-100000}
+      - N_CORES=${N_CORES:-4}
+      - RUN_ON_STARTUP=${PLAYOFF_RUN_ON_STARTUP:-false}
+    networks:
+      - tb_sun-network
+
+networks:
+  tb_sun-network:
+    driver: bridge
