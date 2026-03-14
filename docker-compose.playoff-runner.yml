@@ -1,0 +1,15 @@
+services:
+  playoff-runner:
+    image: ghcr.io/ryanscharf/tb_sun-playoff-runner:latest
+    container_name: playoff-runner
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - N_SIMS=${N_SIMS:-1000000}
+      - N_CORES=${N_CORES:-16}
+      - RUN_ON_STARTUP=${PLAYOFF_RUN_ON_STARTUP:-false}
