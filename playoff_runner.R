@@ -24,7 +24,10 @@ get_db_conn <- function() {
 # eval() stops execution before the bottom section that runs analysis and plots.
 local({
   lines <- readLines("playoff_modeling.R")
-  eval(parse(text = lines[12:686]), envir = globalenv())
+  # Lines 12-621: all function definitions (stops before the main execution block)
+  eval(parse(text = lines[12:621]), envir = globalenv())
+  # Lines 638-686: get_match_probabilities (skips the tictoc/run block at 623-635)
+  eval(parse(text = lines[638:686]), envir = globalenv())
 })
 
 # ── Config ─────────────────────────────────────────────────────────────────────
