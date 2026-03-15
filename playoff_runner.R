@@ -127,15 +127,20 @@ gameweek_id <- dbGetQuery(con, sprintf(
   current_gw_number, current_week_start, current_week_end
 ))$gameweek_id
 
+model_version_id <- dbGetQuery(con,
+  "SELECT model_version_id FROM model_versions WHERE version = '1.0'"
+)$model_version_id
+
 run_id <- dbGetQuery(
   con,
   sprintf(
-    "INSERT INTO simulation_runs (n_sims, games_played, games_remaining, gameweek_id)
-   VALUES (%d, %d, %d, %d) RETURNING run_id",
+    "INSERT INTO simulation_runs (n_sims, games_played, games_remaining, gameweek_id, model_version_id)
+   VALUES (%d, %d, %d, %d, %d) RETURNING run_id",
     N_SIMS,
     nrow(played_games),
     nrow(remaining_games),
-    gameweek_id
+    gameweek_id,
+    model_version_id
   )
 )$run_id
 
