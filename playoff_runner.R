@@ -112,14 +112,30 @@ message(sprintf("[%s] Writing results to Postgres...", Sys.time()))
 con <- get_db_conn()
 on.exit(dbDisconnect(con), add = TRUE)
 
+# Upsert current gameweek based on the most recent played game's ISO week
+current_week_start <- floor_date(max(played_games$date), unit = "week", week_start = 1)
+current_week_end   <- max(played_games$date)
+current_gw_number  <- dbGetQuery(con, sprintf(
+  "SELECT COUNT(*) + 1 AS gw FROM gameweeks WHERE end_date < '%s'", current_week_start
+))$gw
+
+gameweek_id <- dbGetQuery(con, sprintf(
+  "INSERT INTO gameweeks (gameweek_number, start_date, end_date)
+   VALUES (%d, '%s', '%s')
+   ON CONFLICT (gameweek_number) DO UPDATE SET end_date = EXCLUDED.end_date
+   RETURNING gameweek_id",
+  current_gw_number, current_week_start, current_week_end
+))$gameweek_id
+
 run_id <- dbGetQuery(
   con,
   sprintf(
-    "INSERT INTO simulation_runs (n_sims, games_played, games_remaining)
-   VALUES (%d, %d, %d) RETURNING run_id",
+    "INSERT INTO simulation_runs (n_sims, games_played, games_remaining, gameweek_id)
+   VALUES (%d, %d, %d, %d) RETURNING run_id",
     N_SIMS,
     nrow(played_games),
-    nrow(remaining_games)
+    nrow(remaining_games),
+    gameweek_id
   )
 )$run_id
 
@@ -133,15 +149,16 @@ odds_rows <- playoff_odds %>%
     current_points,
     games_played
   ) %>%
-  mutate(run_id = run_id)
+  mutate(run_id = run_id, gameweek_id = gameweek_id)
 
 dbWriteTable(con, "playoff_odds", odds_rows, append = TRUE, row.names = FALSE)
 
 if (nrow(match_probs) > 0) {
   prob_rows <- match_probs %>%
-    mutate(run_id = run_id) %>%
+    mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
     select(
       run_id,
+      gameweek_id,
       match_id,
       home_team_abbr = home_team,
       away_team_abbr = away_team,
