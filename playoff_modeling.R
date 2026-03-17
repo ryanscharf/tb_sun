@@ -463,6 +463,7 @@ calculate_playoff_odds_fast <- function(
     as_tibble()
 
   remaining_games <- schedule_mapped %>%
+    filter(is_completed == FALSE) %>%
     anti_join(played_games, by = c("home_team_id", "away_team_id", "date"))
 
   all_team_ids <- unique(c(
@@ -1094,3 +1095,76 @@ cutoffs %>%
 
 # remaining_games <- schedule_mapped %>%
 #   anti_join(played_games, by = c("home_team_id", "away_team_id", "date"))
+
+# ── Scoreline distributions ────────────────────────────────────────────────────
+get_scoreline_distributions <- function(
+  remaining_games,
+  team_strengths,
+  teams_info,
+  n_sims = 50000,
+  max_goals = 5  # cap scoreline grid at this many goals
+) {
+  match_results <- simulate_matches_vectorized(
+    remaining_games %>% mutate(match_id = row_number()),
+    team_strengths,
+    n_sims
+  )
+
+  match_results %>%
+    lazy_dt() %>%
+    mutate(
+      home_goals_capped = pmin(home_goals, max_goals),
+      away_goals_capped = pmin(away_goals, max_goals)
+    ) %>%
+    group_by(match_id, home_team_id, away_team_id, home_goals_capped, away_goals_capped) %>%
+    summarize(prob = n() / n_sims, .groups = "drop") %>%
+    as_tibble() %>%
+    left_join(teams_info %>% select(team_id, home_team = team_abbreviation),
+              by = c("home_team_id" = "team_id")) %>%
+    left_join(teams_info %>% select(team_id, away_team = team_abbreviation),
+              by = c("away_team_id" = "team_id")) %>%
+    mutate(
+      matchup = paste0(home_team, " vs ", away_team),
+      scoreline = paste0(home_goals_capped, "-", away_goals_capped)
+    ) %>%
+    select(match_id, matchup, home_team, away_team,
+           home_goals = home_goals_capped, away_goals = away_goals_capped,
+           scoreline, prob)
+}
+
+plot_scoreline_distributions <- function(scoreline_dist, ncol = 3) {
+  scoreline_dist %>%
+    mutate(home_loss = away_goals > home_goals) %>%
+    ggplot(aes(x = away_goals, y = home_goals, fill = prob)) +
+    geom_tile(aes(color = home_loss, linewidth = home_loss)) +
+    geom_text(aes(label = scales::percent(prob, accuracy = 0.1)),
+              size = 2.8, color = "white", fontface = "bold") +
+    scale_color_manual(values = c("TRUE" = "black", "FALSE" = "white"), guide = "none") +
+    scale_linewidth_manual(values = c("TRUE" = 1.2, "FALSE" = 0.3), guide = "none") +
+    facet_wrap(~ matchup, ncol = ncol) +
+    scale_fill_gradient(low = "#1a1a2e", high = "#e94560",
+                        labels = scales::percent, name = "Probability") +
+    scale_x_continuous(breaks = 0:5, expand = c(0, 0)) +
+    scale_y_continuous(breaks = 0:5, expand = c(0, 0)) +
+    labs(
+      title = "Scoreline Probability Distributions",
+      subtitle = paste0("Home team on Y-axis | Based on Poisson simulation"),
+      x = "Away Goals",
+      y = "Home Goals"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      panel.grid = element_blank(),
+      legend.position = "bottom"
+    )
+}
+
+# Example usage:
+# scoreline_dist <- get_scoreline_distributions(
+#   remaining_games,
+#   team_strengths_complete,
+#   teams,
+#   n_sims = 50000
+# )
+# plot_scoreline_distributions(scoreline_dist)
