@@ -78,6 +78,7 @@ played_games <- asa_games %>%
   )
 
 remaining_games <- schedule_mapped %>%
+  filter(is_completed == FALSE) %>%
   anti_join(played_games, by = c("home_team_id", "away_team_id", "date")) %>%
   mutate(match_id = row_number())
 
