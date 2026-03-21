@@ -24,10 +24,10 @@ get_db_conn <- function() {
 # eval() stops execution before the bottom section that runs analysis and plots.
 local({
   lines <- readLines("playoff_modeling.R")
-  # Lines 12-621: all function definitions (stops before the main execution block)
-  eval(parse(text = lines[12:621]), envir = globalenv())
-  # Lines 638-686: get_match_probabilities (skips the tictoc/run block at 623-635)
-  eval(parse(text = lines[638:686]), envir = globalenv())
+  # Lines 12-646: all function definitions (stops before the main execution block)
+  eval(parse(text = lines[12:686]), envir = globalenv())
+  # Lines 703-751: get_match_probabilities (skips the tictoc/run block)
+  eval(parse(text = lines[703:751]), envir = globalenv())
 })
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -41,9 +41,12 @@ message(sprintf(
   N_CORES
 ))
 
+con <- get_db_conn()
+on.exit(dbDisconnect(con), add = TRUE)
+
 asa_client <- AmericanSoccerAnalysis$new()
 teams <- asa_client$get_teams(leagues = 'usls')
-schedule <- get_schedule()
+schedule <- get_schedule(con = con)
 
 output <- calculate_playoff_odds_fast(
   schedule,
@@ -109,9 +112,6 @@ match_probs <- get_match_probabilities(
 
 # ── Write to Postgres ──────────────────────────────────────────────────────────
 message(sprintf("[%s] Writing results to Postgres...", Sys.time()))
-
-con <- get_db_conn()
-on.exit(dbDisconnect(con), add = TRUE)
 
 # Upsert current gameweek based on the most recent played game's ISO week
 current_week_start <- floor_date(max(played_games$date), unit = "week", week_start = 1)

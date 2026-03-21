@@ -9,33 +9,97 @@ library(ggridges)
 library(httr2)
 library(jsonlite)
 
-get_schedule <- function(league_id = "10699") {
-  url <- paste0("https://www.fotmob.com/api/leagues?id=", league_id)
+get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
+  url <- paste0("https://www.fotmob.com/api/data/leagues?id=", league_id)
 
-  response <- request(url) %>%
-    req_url_query(id = league_id) %>%
-    req_user_agent("Mozilla/5.0") %>%
-    req_perform()
+  fotmob_schedule <- tryCatch({
+    data <- request(url) %>%
+      req_perform() %>%
+      resp_body_string() %>%
+      fromJSON()
 
-  data <- response %>%
-    resp_body_string() %>%
-    fromJSON()
+    data$fixtures$allMatches %>%
+      unnest_wider(everything(), names_sep = "_") %>%
+      unnest_wider(any_of(c("home", "away")), names_sep = "_") %>%
+      unnest_wider(starts_with("status"), names_sep = "_") %>%
+      select(
+        home_team    = home_name,
+        away_team    = away_name,
+        is_completed = status_finished_1,
+        date_utc     = status_utcTime_1
+      ) %>%
+      mutate(
+        date_utc = as.POSIXct(date_utc, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC"),
+        season   = season
+      )
+  }, error = function(e) {
+    message(sprintf("FotMob fetch failed: %s", conditionMessage(e)))
+    NULL
+  })
 
-  schedule <- data$fixtures$allMatches %>%
-    unnest_wider(everything(), names_sep = "_") %>%
-    unnest_wider(any_of(c("home", "away")), names_sep = "_") %>%
-    unnest_wider(starts_with("status"), names_sep = "_") %>%
-    select(
-      home_team = home_name,
-      away_team = away_name,
-      is_completed = status_finished_1,
-      date_utc = status_utcTime_1
+  if (!is.null(fotmob_schedule) && !is.null(con)) {
+    # Diff against this season's DB rows only to flag rescheduled games
+    db_schedule <- dbGetQuery(con,
+      sprintf("SELECT home_team, away_team, date_utc FROM schedule WHERE season = '%s'", season)
     ) %>%
-    mutate(
-      date_utc = as.POSIXct(date_utc, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
-    )
+      mutate(date_utc = as.POSIXct(date_utc, tz = "UTC"))
 
-  return(schedule)
+    rescheduled_keys <- fotmob_schedule %>%
+      inner_join(db_schedule, by = c("home_team", "away_team"), suffix = c("_new", "_old")) %>%
+      filter(date_utc_new != date_utc_old) %>%
+      select(home_team, away_team, date_utc = date_utc_new)
+
+    fotmob_schedule <- fotmob_schedule %>%
+      left_join(rescheduled_keys %>% mutate(is_rescheduled = TRUE),
+                by = c("home_team", "away_team", "date_utc")) %>%
+      mutate(is_rescheduled = coalesce(is_rescheduled, FALSE))
+
+    n_rescheduled <- sum(fotmob_schedule$is_rescheduled)
+    if (n_rescheduled > 0) message(sprintf("%d game(s) flagged as rescheduled.", n_rescheduled))
+
+    dbWriteTable(con, "schedule_staging", fotmob_schedule,
+                 temporary = TRUE, overwrite = TRUE, row.names = FALSE)
+
+    dbExecute(con, "
+      INSERT INTO schedule (season, home_team, away_team, is_completed, is_rescheduled, date_utc)
+      SELECT season, home_team, away_team, is_completed, is_rescheduled, date_utc FROM schedule_staging
+      ON CONFLICT (season, home_team, away_team, date_utc)
+      DO UPDATE SET
+        is_completed   = EXCLUDED.is_completed,
+        is_rescheduled = EXCLUDED.is_rescheduled,
+        updated_at     = NOW()
+    ")
+
+    deleted <- dbExecute(con, sprintf("
+      DELETE FROM schedule
+      WHERE season = '%s'
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_staging s
+          WHERE s.home_team = schedule.home_team
+            AND s.away_team = schedule.away_team
+            AND s.date_utc  = schedule.date_utc
+        )
+    ", season))
+    if (deleted > 0) message(sprintf("Removed %d stale schedule rows.", deleted))
+
+    message("Schedule synced to DB.")
+    return(fotmob_schedule)
+  }
+
+  if (!is.null(fotmob_schedule)) return(fotmob_schedule)
+
+  if (!is.null(con)) {
+    message("FotMob unavailable — falling back to DB schedule.")
+    schedule <- dbGetQuery(con, sprintf(
+      "SELECT home_team, away_team, is_completed, date_utc FROM schedule WHERE season = '%s' ORDER BY date_utc",
+      season
+    )) %>%
+      mutate(date_utc = as.POSIXct(date_utc, tz = "UTC"))
+    if (nrow(schedule) == 0) stop("DB schedule fallback is empty.")
+    return(schedule)
+  }
+
+  stop("FotMob fetch failed and no DB connection provided for fallback.")
 }
 
 
