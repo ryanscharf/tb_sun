@@ -12,6 +12,7 @@ rm -rf temp_repo
 git clone https://github.com/ryanscharf/tb_sun.git temp_repo || { echo "ERROR: git clone failed"; exit 1; }
 cp temp_repo/playoff_runner.R .
 cp temp_repo/playoff_modeling.R .
+cp temp_repo/functions.R .
 rm -rf temp_repo
 
 Rscript /home/r-environment/playoff_runner.R
