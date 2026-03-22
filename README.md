@@ -11,8 +11,10 @@ Automated data pipeline and playoff modeling for Tampa Bay Sun FC (USL Super Lea
 | File | Role |
 |------|------|
 | `tampa_bay_sun_roster_scraper.R` | Scrapes the USLSL roster page, detects changes vs. the database, and sends a Discord/email notification when players are added or dropped |
-| `playoff_modeling.R` | Interactive modeling script for local use — runs Monte Carlo simulations (1M sims) to calculate playoff probabilities for all 9 USL Super League teams, produces visualizations |
-| `playoff_runner.R` | Production version of `playoff_modeling.R` — sources functions from that file, reads config from environment variables, and writes results to Postgres instead of plotting |
+| `functions.R` | Shared function library — all simulation, scheduling, and probability functions used across scripts. Single source of truth for modeling logic |
+| `playoff_modeling.R` | Interactive modeling script for local use — sources `functions.R`, runs Monte Carlo simulations (1M sims), and produces visualizations |
+| `playoff_runner.R` | Production runner — sources `functions.R`, reads config from environment variables, and writes results to Postgres |
+| `backfill_runner.R` | Backfill runner — sources `functions.R`, iterates through historical gameweeks, and populates Postgres with historical simulation results |
 | `progress.R` | Scratch/exploratory script |
 | `test_scraper.R` | Scratch/testing script |
 

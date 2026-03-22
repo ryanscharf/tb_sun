@@ -20,15 +20,7 @@ get_db_conn <- function() {
   )
 }
 
-# Source functions and team_name_mapping from the modeling script.
-# eval() stops execution before the bottom section that runs analysis and plots.
-local({
-  lines <- readLines("playoff_modeling.R")
-  # Lines 12-646: all function definitions (stops before the main execution block)
-  eval(parse(text = lines[12:686]), envir = globalenv())
-  # Lines 703-751: get_match_probabilities (skips the tictoc/run block)
-  eval(parse(text = lines[703:751]), envir = globalenv())
-})
+source("functions.R")
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 N_SIMS <- as.integer(Sys.getenv("N_SIMS", "100000"))
