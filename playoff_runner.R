@@ -47,62 +47,12 @@ output <- calculate_playoff_odds_fast(
   n_sims = N_SIMS,
   n_cores = N_CORES
 )
-playoff_odds <- output$summary
-
-# Rebuild remaining_games + team_strengths for match probabilities
-asa_games <- asa_client$get_games(leagues = 'usls', season = '2025-26') %>%
-  mutate(date_only = as.Date(date_time_utc))
-
-schedule_mapped <- schedule %>%
-  left_join(team_name_mapping, by = c("home_team" = "fotmob_name")) %>%
-  rename(home_team_id = team_id) %>%
-  mutate(home_team = schedule_name) %>%
-  select(-team_abbreviation, -schedule_name) %>%
-  left_join(team_name_mapping, by = c("away_team" = "fotmob_name")) %>%
-  rename(away_team_id = team_id) %>%
-  mutate(away_team = schedule_name) %>%
-  select(-team_abbreviation) %>%
-  mutate(date = as.Date(date_utc))
-
-played_games <- asa_games %>%
-  filter(status == "FullTime") %>%
-  select(
-    home_team_id,
-    away_team_id,
-    home_goals = home_score,
-    away_goals = away_score,
-    date = date_only
-  )
-
-remaining_games <- schedule_mapped %>%
-  filter(is_completed == FALSE) %>%
-  anti_join(played_games, by = c("home_team_id", "away_team_id", "date")) %>%
-  mutate(match_id = row_number())
-
-all_team_ids <- unique(c(
-  schedule_mapped$home_team_id,
-  schedule_mapped$away_team_id
-))
-
-team_strengths_complete <- tibble(team = all_team_ids) %>%
-  left_join(calculate_team_strengths(played_games), by = "team") %>%
-  mutate(
-    l_avg = mean(attack_strength, na.rm = TRUE),
-    attack_strength = if_else(is.na(attack_strength), l_avg, attack_strength),
-    defense_strength = if_else(is.na(defense_strength), l_avg, defense_strength)
-  ) %>%
-  select(-l_avg)
-
-match_probs <- get_match_probabilities(
-  remaining_games,
-  team_strengths_complete,
-  teams,
-  n_sims = min(N_SIMS, 50000)
-) %>%
-  left_join(
-    remaining_games %>% select(match_id, match_date = date),
-    by = "match_id"
-  )
+playoff_odds     <- output$summary
+played_games     <- output$played_games
+remaining_games  <- output$remaining_games
+match_probs      <- output$match_probs %>%
+  left_join(remaining_games %>% select(match_id, match_date = date), by = "match_id")
+scoreline_dist   <- output$scoreline_dist
 
 # ── Write to Postgres ──────────────────────────────────────────────────────────
 message(sprintf("[%s] Writing results to Postgres...", Sys.time()))
@@ -172,13 +122,18 @@ if (nrow(match_probs) > 0) {
       avg_away_goals
     )
 
-  dbWriteTable(
-    con,
-    "match_probabilities",
-    prob_rows,
-    append = TRUE,
-    row.names = FALSE
-  )
+  dbWriteTable(con, "match_probabilities", prob_rows, append = TRUE, row.names = FALSE)
+}
+
+if (nrow(scoreline_dist) > 0) {
+  scoreline_rows <- scoreline_dist %>%
+    left_join(remaining_games %>% select(match_id, match_date = date), by = "match_id") %>%
+    mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+    select(run_id, gameweek_id, match_id,
+           home_team_abbr = home_team, away_team_abbr = away_team,
+           match_date, home_goals, away_goals, scoreline, prob)
+
+  dbWriteTable(con, "scoreline_distributions", scoreline_rows, append = TRUE, row.names = FALSE)
 }
 
 message(sprintf("[%s] Done. run_id = %d", Sys.time(), run_id))

@@ -416,7 +416,8 @@ calculate_playoff_odds_fast <- function(
 
   remaining_games <- schedule_mapped %>%
     filter(is_completed == FALSE) %>%
-    anti_join(played_games, by = c("home_team_id", "away_team_id", "date"))
+    anti_join(played_games, by = c("home_team_id", "away_team_id", "date")) %>%
+    mutate(match_id = row_number())
 
   all_team_ids <- unique(c(
     schedule_mapped$home_team_id,
@@ -554,24 +555,28 @@ calculate_playoff_odds_fast <- function(
     ) %>%
     arrange(desc(playoff_pct))
 
-  return(list(
-    summary = final_tab,
-    raw = as.data.table(playoff_results)
-  ))
-}
-
-get_match_probabilities <- function(
-  remaining_games,
-  team_strengths,
-  teams_info,
-  n_sims = 10000
-) {
+  # Single match-level simulation — shared by match probs and scoreline distributions
+  message("Running match-level simulation...")
   match_results <- simulate_matches_vectorized(
     remaining_games,
-    team_strengths,
+    team_strengths_complete,
     n_sims
   )
 
+  match_probs    <- get_match_probabilities(match_results, remaining_games, teams)
+  scoreline_dist <- get_scoreline_distributions(match_results, remaining_games, teams)
+
+  return(list(
+    summary         = final_tab,
+    raw             = as.data.table(playoff_results),
+    match_probs     = match_probs,
+    scoreline_dist  = scoreline_dist,
+    played_games    = played_games,
+    remaining_games = remaining_games
+  ))
+}
+
+get_match_probabilities <- function(match_results, remaining_games, teams_info) {
   match_probs <- match_results %>%
     lazy_dt() %>%
     group_by(match_id, home_team_id, away_team_id, home_xg, away_xg) %>%
@@ -681,19 +686,7 @@ get_team_path_to_playoffs <- function(
   return(team_schedule)
 }
 
-get_scoreline_distributions <- function(
-  remaining_games,
-  team_strengths,
-  teams_info,
-  n_sims = 50000,
-  max_goals = 5
-) {
-  match_results <- simulate_matches_vectorized(
-    remaining_games %>% mutate(match_id = row_number()),
-    team_strengths,
-    n_sims
-  )
-
+get_scoreline_distributions <- function(match_results, remaining_games, teams_info, max_goals = 5) {
   match_results %>%
     lazy_dt() %>%
     mutate(
