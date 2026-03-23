@@ -15,7 +15,7 @@ cp temp_repo/playoff_modeling.R .
 cp temp_repo/functions.R .
 rm -rf temp_repo
 
-Rscript /home/r-environment/playoff_runner.R
+/usr/local/bin/Rscript /home/r-environment/playoff_runner.R
 EXIT_CODE=$?
 
 [ $EXIT_CODE -eq 0 ] && echo "Simulation complete." || echo "ERROR: exited $EXIT_CODE"
