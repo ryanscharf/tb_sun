@@ -1,10 +1,12 @@
-library(tidyverse)
-library(itscalledsoccer)
-library(mirai)
-library(data.table)
-library(dtplyr)
-library(httr2)
-library(jsonlite)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(itscalledsoccer)
+  library(mirai)
+  library(data.table)
+  library(dtplyr)
+  library(httr2)
+  library(jsonlite)
+})
 
 get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
   url <- paste0("https://www.fotmob.com/api/data/leagues?id=", league_id)
