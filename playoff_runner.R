@@ -1,12 +1,14 @@
-library(tidyverse)
-library(itscalledsoccer)
-library(mirai)
-library(data.table)
-library(dtplyr)
-library(httr2)
-library(jsonlite)
-library(DBI)
-library(RPostgres)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(itscalledsoccer)
+  library(mirai)
+  library(data.table)
+  library(dtplyr)
+  library(httr2)
+  library(jsonlite)
+  library(DBI)
+  library(RPostgres)
+})
 
 # ── DB connection ──────────────────────────────────────────────────────────────
 get_db_conn <- function() {
@@ -108,23 +110,23 @@ message(sprintf("[%s] Writing results to Postgres...", Sys.time()))
 # Upsert current gameweek based on the most recent played game's ISO week
 current_week_start <- floor_date(max(played_games$date), unit = "week", week_start = 1)
 current_week_end   <- max(played_games$date)
-current_gw_number  <- dbGetQuery(con, sprintf(
+current_gw_number <- as.integer(dbGetQuery(con, sprintf(
   "SELECT COUNT(*) + 1 AS gw FROM gameweeks WHERE end_date < '%s'", current_week_start
-))$gw
+))$gw)
 
-gameweek_id <- dbGetQuery(con, sprintf(
+gameweek_id <- as.integer(dbGetQuery(con, sprintf(
   "INSERT INTO gameweeks (gameweek_number, start_date, end_date)
    VALUES (%d, '%s', '%s')
    ON CONFLICT (gameweek_number) DO UPDATE SET end_date = EXCLUDED.end_date
    RETURNING gameweek_id",
   current_gw_number, current_week_start, current_week_end
-))$gameweek_id
+))$gameweek_id)
 
-model_version_id <- dbGetQuery(con,
+model_version_id <- as.integer(dbGetQuery(con,
   "SELECT model_version_id FROM model_versions WHERE version = '1.0'"
-)$model_version_id
+)$model_version_id)
 
-run_id <- dbGetQuery(
+run_id <- as.integer(dbGetQuery(
   con,
   sprintf(
     "INSERT INTO simulation_runs (n_sims, games_played, games_remaining, gameweek_id, model_version_id)
@@ -135,7 +137,7 @@ run_id <- dbGetQuery(
     gameweek_id,
     model_version_id
   )
-)$run_id
+)$run_id)
 
 odds_rows <- playoff_odds %>%
   select(
