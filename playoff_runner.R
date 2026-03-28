@@ -39,7 +39,7 @@ con <- get_db_conn()
 on.exit(dbDisconnect(con), add = TRUE)
 
 asa_client <- AmericanSoccerAnalysis$new()
-teams <- asa_client$get_teams(leagues = 'usls')
+teams <- suppressMessages(asa_client$get_teams(leagues = 'usls'))
 schedule <- get_schedule(con = con)
 
 output <- calculate_playoff_odds_fast(
@@ -53,6 +53,8 @@ remaining_games  <- output$remaining_games
 match_probs      <- output$match_probs %>%
   left_join(remaining_games %>% select(match_id, match_date = date), by = "match_id")
 scoreline_dist   <- output$scoreline_dist
+rank_dist        <- output$rank_dist
+cutoff_dist      <- output$cutoff_dist
 
 # ── Write to Postgres ──────────────────────────────────────────────────────────
 message(sprintf("[%s] Writing results to Postgres...", Sys.time()))
@@ -135,5 +137,15 @@ if (nrow(scoreline_dist) > 0) {
 
   dbWriteTable(con, "scoreline_distributions", scoreline_rows, append = TRUE, row.names = FALSE)
 }
+
+rank_rows <- rank_dist %>%
+  mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+  select(run_id, gameweek_id, team_id = team, team_abbreviation, rank, count, pct)
+dbWriteTable(con, "rank_distributions", rank_rows, append = TRUE, row.names = FALSE)
+
+cutoff_rows <- cutoff_dist %>%
+  mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+  select(run_id, gameweek_id, points, count, pct)
+dbWriteTable(con, "cutoff_distributions", cutoff_rows, append = TRUE, row.names = FALSE)
 
 message(sprintf("[%s] Done. run_id = %d", Sys.time(), run_id))

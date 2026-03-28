@@ -1,12 +1,27 @@
-library(tidyverse)
-library(itscalledsoccer)
-library(mirai)
-library(data.table)
-library(dtplyr)
-library(httr2)
-library(jsonlite)
-library(DBI)
-library(RPostgres)
+if (file.exists(".env")) {
+  lines <- readLines(".env")
+  lines <- lines[!grepl("^\\s*#", lines) & nzchar(trimws(lines))]
+  for (line in lines) {
+    kv <- strsplit(line, "=", fixed = TRUE)[[1]]
+    if (length(kv) >= 2) {
+      key <- trimws(kv[1])
+      val <- trimws(paste(kv[-1], collapse = "="))
+      do.call(Sys.setenv, setNames(list(val), key))
+    }
+  }
+}
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(itscalledsoccer)
+  library(mirai)
+  library(data.table)
+  library(dtplyr)
+  library(httr2)
+  library(jsonlite)
+  library(DBI)
+  library(RPostgres)
+})
 
 source("functions.R")
 
@@ -25,18 +40,17 @@ get_db_conn <- function() {
 N_SIMS  <- as.integer(Sys.getenv("N_SIMS",  "100000"))
 N_CORES <- as.integer(Sys.getenv("N_CORES", "4"))
 
+message(sprintf("[%s] Starting backfill (%s sims, %d cores)",
+                Sys.time(), format(N_SIMS, big.mark = ","), N_CORES))
+
 # ── Fetch all data once ────────────────────────────────────────────────────────
-message("Fetching data from ASA and FotMob...")
+asa_client <- AmericanSoccerAnalysis$new()
+teams      <- suppressMessages(asa_client$get_teams(leagues = 'usls'))
+asa_games  <- suppressMessages(asa_client$get_games(leagues = 'usls', season = '2025-26')) %>%
+  mutate(date_only = as.Date(date_time_utc))
 
 init_con <- get_db_conn()
-on.exit(try(dbDisconnect(init_con), silent = TRUE), add = TRUE)
-
-asa_client <- AmericanSoccerAnalysis$new()
-teams      <- asa_client$get_teams(leagues = 'usls')
-schedule   <- get_schedule(con = init_con)
-
-asa_games <- asa_client$get_games(leagues = 'usls', season = '2025-26') %>%
-  mutate(date_only = as.Date(date_time_utc))
+schedule <- get_schedule(con = init_con)
 
 schedule_mapped <- schedule %>%
   left_join(team_name_mapping, by = c("home_team" = "fotmob_name")) %>%
@@ -59,8 +73,11 @@ all_played_games <- asa_games %>%
 
 all_team_ids <- unique(c(schedule_mapped$home_team_id, schedule_mapped$away_team_id))
 
+model_version_id <- as.integer(dbGetQuery(init_con,
+  "SELECT model_version_id FROM model_versions WHERE version = '1.0'"
+)$model_version_id)
+
 # ── Define gameweek cutoffs ────────────────────────────────────────────────────
-# Group match dates into gameweeks by ISO week
 gameweeks_df <- all_played_games %>%
   mutate(iso_week = paste(lubridate::isoyear(date), lubridate::isoweek(date), sep = "-W")) %>%
   group_by(iso_week) %>%
@@ -75,16 +92,15 @@ dbWriteTable(init_con, "gameweeks",
   gameweeks_df %>% select(gameweek_number, start_date, end_date),
   append = TRUE, row.names = FALSE
 )
-# Fetch back with DB-assigned gameweek_ids
 gameweeks_with_ids <- dbGetQuery(init_con, "SELECT * FROM gameweeks ORDER BY gameweek_number")
 dbDisconnect(init_con)
 
 # ── Loop through each gameweek ─────────────────────────────────────────────────
 for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
-  gw            <- gameweeks_with_ids[gw_row, ]
-  cutoff_date   <- as.Date(gw$end_date)
-  gameweek_id   <- gw$gameweek_id
-  gw_number     <- gw$gameweek_number
+  gw          <- gameweeks_with_ids[gw_row, ]
+  cutoff_date <- as.Date(gw$end_date)
+  gameweek_id <- as.integer(gw$gameweek_id)
+  gw_number   <- gw$gameweek_number
 
   message(sprintf("\n── Gameweek %d (%s to %s) ──────────────────────────────",
                   gw_number, gw$start_date, cutoff_date))
@@ -96,7 +112,7 @@ for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
 
   message(sprintf("   %d played, %d remaining", nrow(played_games), nrow(remaining_games)))
 
-  # Build current standings
+  # Build standings
   home_standings <- played_games %>%
     group_by(team = home_team_id) %>%
     summarize(pts = sum(if_else(home_goals > away_goals, 3, if_else(home_goals == away_goals, 1, 0))),
@@ -128,13 +144,13 @@ for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
     ) %>%
     select(-l_avg)
 
-  # Run simulation
+  # ── Season simulation (playoff odds) ────────────────────────────────────────
   daemons(N_CORES)
   everywhere({ library(data.table) })
 
   sims_per_worker <- ceiling(N_SIMS / N_CORES)
 
-  sim_results <- map(
+  playoff_results <- map(
     1:N_CORES,
     in_parallel(
       function(i) {
@@ -154,7 +170,7 @@ for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
 
   daemons(0)
 
-  playoff_summary <- sim_results %>%
+  playoff_summary <- playoff_results %>%
     lazy_dt() %>%
     group_by(team) %>%
     summarize(playoff_pct = mean(made_playoffs) * 100, avg_pts = mean(points), .groups = "drop") %>%
@@ -162,27 +178,44 @@ for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
     left_join(current_standings, by = "team") %>%
     left_join(teams %>% select(team_id, team_name, team_abbreviation), by = c("team" = "team_id"))
 
-  match_probs <- get_match_probabilities(
+  rank_dist <- playoff_results %>%
+    lazy_dt() %>%
+    group_by(team, rank) %>%
+    summarize(count = n(), .groups = "drop") %>%
+    as_tibble() %>%
+    mutate(pct = count / N_SIMS) %>%
+    left_join(teams %>% select(team_id, team_abbreviation), by = c("team" = "team_id"))
+
+  cutoff_dist <- playoff_results %>%
+    lazy_dt() %>%
+    filter(rank == 4L) %>%
+    group_by(points) %>%
+    summarize(count = n(), .groups = "drop") %>%
+    as_tibble() %>%
+    mutate(pct = count / N_SIMS)
+
+  # ── Match-level simulation (probs + scorelines) ─────────────────────────────
+  match_results <- simulate_matches_vectorized(
     remaining_games,
     team_strengths_complete,
-    teams,
-    n_sims = min(N_SIMS, 50000)
-  ) %>%
+    N_SIMS
+  )
+
+  match_probs <- get_match_probabilities(match_results, remaining_games, teams) %>%
     left_join(remaining_games %>% select(match_id, match_date = date), by = "match_id")
 
-  # Write to DB with historical timestamp — connect fresh after simulation
+  scoreline_dist <- get_scoreline_distributions(match_results, remaining_games, teams, N_SIMS) %>%
+    left_join(remaining_games %>% select(match_id, match_date = date), by = "match_id")
+
+  # ── Write to DB ──────────────────────────────────────────────────────────────
   con <- get_db_conn()
 
-  model_version_id <- dbGetQuery(con,
-    "SELECT model_version_id FROM model_versions WHERE version = '1.0'"
-  )$model_version_id
-
-  run_id <- dbGetQuery(con, sprintf(
+  run_id <- as.integer(dbGetQuery(con, sprintf(
     "INSERT INTO simulation_runs (run_at, n_sims, games_played, games_remaining, gameweek_id, model_version_id)
      VALUES ('%s'::timestamptz, %d, %d, %d, %d, %d) RETURNING run_id",
     paste0(cutoff_date, " 23:59:59 America/New_York"),
     N_SIMS, nrow(played_games), nrow(remaining_games), gameweek_id, model_version_id
-  ))$run_id
+  ))$run_id)
 
   odds_rows <- playoff_summary %>%
     select(team_id = team, team_name, team_abbreviation,
@@ -200,8 +233,27 @@ for (gw_row in seq_len(nrow(gameweeks_with_ids))) {
     dbWriteTable(con, "match_probabilities", prob_rows, append = TRUE, row.names = FALSE)
   }
 
+  if (nrow(scoreline_dist) > 0) {
+    scoreline_rows <- scoreline_dist %>%
+      mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+      select(run_id, gameweek_id, match_id,
+             home_team_abbr = home_team, away_team_abbr = away_team,
+             match_date, home_goals, away_goals, scoreline, prob)
+    dbWriteTable(con, "scoreline_distributions", scoreline_rows, append = TRUE, row.names = FALSE)
+  }
+
+  rank_rows <- rank_dist %>%
+    mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+    select(run_id, gameweek_id, team_id = team, team_abbreviation, rank, count, pct)
+  dbWriteTable(con, "rank_distributions", rank_rows, append = TRUE, row.names = FALSE)
+
+  cutoff_rows <- cutoff_dist %>%
+    mutate(run_id = run_id, gameweek_id = gameweek_id) %>%
+    select(run_id, gameweek_id, points, count, pct)
+  dbWriteTable(con, "cutoff_distributions", cutoff_rows, append = TRUE, row.names = FALSE)
+
   message(sprintf("   Written run_id = %d", run_id))
   dbDisconnect(con)
 }
 
-message("\nBackfill complete.")
+message(sprintf("\n[%s] Backfill complete.", Sys.time()))

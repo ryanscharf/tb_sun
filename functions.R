@@ -11,55 +11,89 @@ suppressPackageStartupMessages({
 get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
   url <- paste0("https://www.fotmob.com/api/data/leagues?id=", league_id)
 
-  fotmob_schedule <- tryCatch({
-    data <- request(url) %>%
-      req_perform() %>%
-      resp_body_string() %>%
-      fromJSON()
+  fotmob_schedule <- tryCatch(
+    {
+      data <- request(url) %>%
+        req_perform() %>%
+        resp_body_string() %>%
+        fromJSON()
 
-    data$fixtures$allMatches %>%
-      unnest_wider(everything(), names_sep = "_") %>%
-      unnest_wider(any_of(c("home", "away")), names_sep = "_") %>%
-      unnest_wider(starts_with("status"), names_sep = "_") %>%
-      select(
-        home_team    = home_name,
-        away_team    = away_name,
-        is_completed = status_finished_1,
-        date_utc     = status_utcTime_1
-      ) %>%
-      mutate(
-        date_utc = as.POSIXct(date_utc, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC"),
-        season   = season
-      )
-  }, error = function(e) {
-    message(sprintf("FotMob fetch failed: %s", conditionMessage(e)))
-    NULL
-  })
+      data$fixtures$allMatches %>%
+        unnest_wider(everything(), names_sep = "_") %>%
+        unnest_wider(any_of(c("home", "away")), names_sep = "_") %>%
+        unnest_wider(starts_with("status"), names_sep = "_") %>%
+        select(
+          home_team = home_name,
+          away_team = away_name,
+          is_completed = status_finished_1,
+          date_utc = status_utcTime_1
+        ) %>%
+        mutate(
+          date_utc = as.POSIXct(
+            date_utc,
+            format = "%Y-%m-%dT%H:%M:%S",
+            tz = "UTC"
+          ),
+          season = season
+        )
+    },
+    error = function(e) {
+      message(sprintf("FotMob fetch failed: %s", conditionMessage(e)))
+      NULL
+    }
+  )
 
   if (!is.null(fotmob_schedule) && !is.null(con)) {
     # Diff against this season's DB rows only to flag rescheduled games
-    db_schedule <- dbGetQuery(con,
-      sprintf("SELECT home_team, away_team, date_utc FROM schedule WHERE season = '%s'", season)
+    db_schedule <- dbGetQuery(
+      con,
+      sprintf(
+        "SELECT home_team, away_team, date_utc FROM schedule WHERE season = '%s'",
+        season
+      )
     ) %>%
       mutate(date_utc = as.POSIXct(date_utc, tz = "UTC"))
 
-    rescheduled_keys <- fotmob_schedule %>%
-      inner_join(db_schedule, by = c("home_team", "away_team"), suffix = c("_new", "_old")) %>%
-      filter(date_utc_new != date_utc_old) %>%
-      select(home_team, away_team, date_utc = date_utc_new)
+    # A game is rescheduled if its (home, away, old_date) is no longer in FotMob
+    # but a new date exists for the same matchup. Anti-join avoids many-to-many
+    # issues when teams meet more than once in a season.
+    fotmob_keys <- fotmob_schedule %>% select(home_team, away_team, date_utc)
+    db_keys     <- db_schedule      %>% select(home_team, away_team, date_utc)
+
+    removed_games <- anti_join(db_keys,     fotmob_keys, by = c("home_team", "away_team", "date_utc"))
+    added_games   <- anti_join(fotmob_keys, db_keys,     by = c("home_team", "away_team", "date_utc"))
+
+    rescheduled_keys <- inner_join(
+      added_games,
+      removed_games %>% select(home_team, away_team),
+      by = c("home_team", "away_team")
+    ) %>%
+      distinct(home_team, away_team, date_utc)
 
     fotmob_schedule <- fotmob_schedule %>%
-      left_join(rescheduled_keys %>% mutate(is_rescheduled = TRUE),
-                by = c("home_team", "away_team", "date_utc")) %>%
+      left_join(
+        rescheduled_keys %>% mutate(is_rescheduled = TRUE),
+        by = c("home_team", "away_team", "date_utc")
+      ) %>%
       mutate(is_rescheduled = coalesce(is_rescheduled, FALSE))
 
     n_rescheduled <- sum(fotmob_schedule$is_rescheduled)
-    if (n_rescheduled > 0) message(sprintf("%d game(s) flagged as rescheduled.", n_rescheduled))
+    if (n_rescheduled > 0) {
+      message(sprintf("%d game(s) flagged as rescheduled.", n_rescheduled))
+    }
 
-    dbWriteTable(con, "schedule_staging", fotmob_schedule,
-                 temporary = TRUE, overwrite = TRUE, row.names = FALSE)
+    dbWriteTable(
+      con,
+      "schedule_staging",
+      fotmob_schedule,
+      temporary = TRUE,
+      overwrite = TRUE,
+      row.names = FALSE
+    )
 
-    dbExecute(con, "
+    dbExecute(
+      con,
+      "
       INSERT INTO schedule (season, home_team, away_team, is_completed, is_rescheduled, date_utc)
       SELECT season, home_team, away_team, is_completed, is_rescheduled, date_utc FROM schedule_staging
       ON CONFLICT (season, home_team, away_team, date_utc)
@@ -67,9 +101,13 @@ get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
         is_completed   = EXCLUDED.is_completed,
         is_rescheduled = EXCLUDED.is_rescheduled,
         updated_at     = NOW()
-    ")
+    "
+    )
 
-    deleted <- dbExecute(con, sprintf("
+    deleted <- dbExecute(
+      con,
+      sprintf(
+        "
       DELETE FROM schedule
       WHERE season = '%s'
         AND NOT EXISTS (
@@ -78,23 +116,35 @@ get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
             AND s.away_team = schedule.away_team
             AND s.date_utc  = schedule.date_utc
         )
-    ", season))
-    if (deleted > 0) message(sprintf("Removed %d stale schedule rows.", deleted))
+    ",
+        season
+      )
+    )
+    if (deleted > 0) {
+      message(sprintf("Removed %d stale schedule rows.", deleted))
+    }
 
     message("Schedule synced to DB.")
     return(fotmob_schedule)
   }
 
-  if (!is.null(fotmob_schedule)) return(fotmob_schedule)
+  if (!is.null(fotmob_schedule)) {
+    return(fotmob_schedule)
+  }
 
   if (!is.null(con)) {
     message("FotMob unavailable — falling back to DB schedule.")
-    schedule <- dbGetQuery(con, sprintf(
-      "SELECT home_team, away_team, is_completed, date_utc FROM schedule WHERE season = '%s' ORDER BY date_utc",
-      season
-    )) %>%
+    schedule <- dbGetQuery(
+      con,
+      sprintf(
+        "SELECT home_team, away_team, is_completed, date_utc FROM schedule WHERE season = '%s' ORDER BY date_utc",
+        season
+      )
+    ) %>%
       mutate(date_utc = as.POSIXct(date_utc, tz = "UTC"))
-    if (nrow(schedule) == 0) stop("DB schedule fallback is empty.")
+    if (nrow(schedule) == 0) {
+      stop("DB schedule fallback is empty.")
+    }
     return(schedule)
   }
 
@@ -286,7 +336,6 @@ aggregate_season_results <- function(
   return(season_results)
 }
 
-# VECTORIZED simulation - simulate ALL games for ALL sims at once
 simulate_season_vectorized <- function(
   current_standings,
   remaining_games,
@@ -367,14 +416,16 @@ simulate_season_vectorized <- function(
     (final_gs) +
     matrix(runif(n_sims * n_teams), n_sims, n_teams)
 
-  playoffs <- t(apply(tb_score, 1, function(x) {
-    rank(-x, ties.method = "random") <= 4
+  rank_matrix <- t(apply(tb_score, 1, function(x) {
+    rank(-x, ties.method = "random")
   }))
 
   results <- data.table(
+    sim_id = rep(1:n_sims, times = n_teams),
     team = rep(all_teams, each = n_sims),
     points = as.vector(final_pts),
-    made_playoffs = as.vector(playoffs)
+    rank = as.integer(as.vector(rank_matrix)),
+    made_playoffs = as.vector(rank_matrix) <= 4L
   )
 
   return(results)
@@ -386,7 +437,7 @@ calculate_playoff_odds_fast <- function(
   n_cores = 6
 ) {
   message("Fetching official scores from ASA API...")
-  asa_games <- asa_client$get_games(leagues = 'usls', season = '2025-26') %>%
+  asa_games <- suppressMessages(asa_client$get_games(leagues = 'usls', season = '2025-26')) %>%
     lazy_dt() %>%
     mutate(date_only = as.Date(date_time_utc)) %>%
     as_tibble()
@@ -502,7 +553,9 @@ calculate_playoff_odds_fast <- function(
   ))
 
   daemons(n_cores)
-  everywhere({ library(data.table) })
+  everywhere({
+    library(data.table)
+  })
 
   sims_per_worker <- ceiling(n_sims / n_cores)
 
@@ -555,6 +608,25 @@ calculate_playoff_odds_fast <- function(
     ) %>%
     arrange(desc(playoff_pct))
 
+  rank_dist <- playoff_results %>%
+    lazy_dt() %>%
+    group_by(team, rank) %>%
+    summarize(count = n(), .groups = "drop") %>%
+    as_tibble() %>%
+    mutate(pct = count / n_sims) %>%
+    left_join(
+      teams %>% select(team_id, team_abbreviation),
+      by = c("team" = "team_id")
+    )
+
+  cutoff_dist <- playoff_results %>%
+    lazy_dt() %>%
+    filter(rank == 4L) %>%
+    group_by(points) %>%
+    summarize(count = n(), .groups = "drop") %>%
+    as_tibble() %>%
+    mutate(pct = count / n_sims)
+
   # Single match-level simulation — shared by match probs and scoreline distributions
   message("Running match-level simulation...")
   match_results <- simulate_matches_vectorized(
@@ -563,20 +635,31 @@ calculate_playoff_odds_fast <- function(
     n_sims
   )
 
-  match_probs    <- get_match_probabilities(match_results, remaining_games, teams)
-  scoreline_dist <- get_scoreline_distributions(match_results, remaining_games, teams)
+  match_probs <- get_match_probabilities(match_results, remaining_games, teams)
+  scoreline_dist <- get_scoreline_distributions(
+    match_results,
+    remaining_games,
+    teams,
+    n_sims
+  )
 
   return(list(
-    summary         = final_tab,
-    raw             = as.data.table(playoff_results),
-    match_probs     = match_probs,
-    scoreline_dist  = scoreline_dist,
-    played_games    = played_games,
+    summary = final_tab,
+    raw = as.data.table(playoff_results),
+    match_probs = match_probs,
+    scoreline_dist = scoreline_dist,
+    rank_dist = rank_dist,
+    cutoff_dist = cutoff_dist,
+    played_games = played_games,
     remaining_games = remaining_games
   ))
 }
 
-get_match_probabilities <- function(match_results, remaining_games, teams_info) {
+get_match_probabilities <- function(
+  match_results,
+  remaining_games,
+  teams_info
+) {
   match_probs <- match_results %>%
     lazy_dt() %>%
     group_by(match_id, home_team_id, away_team_id, home_xg, away_xg) %>%
@@ -686,46 +769,290 @@ get_team_path_to_playoffs <- function(
   return(team_schedule)
 }
 
-get_scoreline_distributions <- function(match_results, remaining_games, teams_info, max_goals = 5) {
+get_scoreline_distributions <- function(
+  match_results,
+  remaining_games,
+  teams_info,
+  n_sims,
+  max_goals = 5
+) {
   match_results %>%
     lazy_dt() %>%
     mutate(
       home_goals_capped = pmin(home_goals, max_goals),
       away_goals_capped = pmin(away_goals, max_goals)
     ) %>%
-    group_by(match_id, home_team_id, away_team_id, home_goals_capped, away_goals_capped) %>%
+    group_by(
+      match_id,
+      home_team_id,
+      away_team_id,
+      home_goals_capped,
+      away_goals_capped
+    ) %>%
     summarize(prob = n() / n_sims, .groups = "drop") %>%
     as_tibble() %>%
-    left_join(teams_info %>% select(team_id, home_team = team_abbreviation),
-              by = c("home_team_id" = "team_id")) %>%
-    left_join(teams_info %>% select(team_id, away_team = team_abbreviation),
-              by = c("away_team_id" = "team_id")) %>%
+    left_join(
+      teams_info %>% select(team_id, home_team = team_abbreviation),
+      by = c("home_team_id" = "team_id")
+    ) %>%
+    left_join(
+      teams_info %>% select(team_id, away_team = team_abbreviation),
+      by = c("away_team_id" = "team_id")
+    ) %>%
     mutate(
       matchup = paste0(home_team, " vs ", away_team),
       scoreline = paste0(home_goals_capped, "-", away_goals_capped)
     ) %>%
-    select(match_id, matchup, home_team, away_team,
-           home_goals = home_goals_capped, away_goals = away_goals_capped,
-           scoreline, prob)
+    select(
+      match_id,
+      matchup,
+      home_team,
+      away_team,
+      home_goals = home_goals_capped,
+      away_goals = away_goals_capped,
+      scoreline,
+      prob
+    )
+}
+
+plot_playoff_odds <- function(odds, run) {
+  odds %>%
+    mutate(team_abbreviation = fct_reorder(team_abbreviation, playoff_pct)) %>%
+    ggplot(aes(x = team_abbreviation, y = playoff_pct)) +
+    geom_col(aes(fill = playoff_pct > 50), show.legend = FALSE) +
+    geom_text(
+      aes(label = sprintf("%.1f%%", playoff_pct)),
+      hjust = -0.1,
+      size = 3.5
+    ) +
+    coord_flip() +
+    scale_fill_manual(values = c("FALSE" = "gray70", "TRUE" = "darkgreen")) +
+    scale_y_continuous(limits = c(0, 110), expand = c(0, 0)) +
+    labs(
+      title = "USL Super League Playoff Probabilities",
+      subtitle = sprintf(
+        "Based on %s Monte Carlo simulations | Gameweek %s",
+        format(run$n_sims, big.mark = ","),
+        run$gameweek_number
+      ),
+      x = NULL,
+      y = "Playoff Probability (%)"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      panel.grid.major.y = element_blank()
+    )
+}
+
+table_uncertainty <- function(odds, n_sims) {
+  odds %>%
+    mutate(
+      p = playoff_pct / 100,
+      se = sqrt(p * (1 - p) / n_sims),
+      lower_ci = pmax(0, p - 1.96 * se),
+      upper_ci = pmin(1, p + 1.96 * se)
+    ) %>%
+    transmute(
+      Team = team_abbreviation,
+      Chance = sprintf("%.2f%%", p * 100),
+      `Std. Error` = sprintf("%.2f%%", se * 100),
+      `95% Low` = sprintf("%.2f%%", lower_ci * 100),
+      `95% High` = sprintf("%.2f%%", upper_ci * 100)
+    )
+}
+
+table_match_probs <- function(match_probs) {
+  match_probs %>%
+    mutate(
+      match_date = format(as.Date(match_date), "%b %d"),
+      home_win_pct = sprintf("%.1f%%", home_win_pct),
+      draw_pct = sprintf("%.1f%%", draw_pct),
+      away_win_pct = sprintf("%.1f%%", away_win_pct),
+      home_xg = sprintf("%.2f", home_xg),
+      away_xg = sprintf("%.2f", away_xg)
+    ) %>%
+    select(
+      Date = match_date,
+      Home = home_team_abbr,
+      `Home Win` = home_win_pct,
+      Draw = draw_pct,
+      `Away Win` = away_win_pct,
+      `Home xG` = home_xg,
+      `Away xG` = away_xg,
+      Away = away_team_abbr
+    )
+}
+
+
+plot_trends <- function(history, seed = 42) {
+  team_levels <- history %>%
+    distinct(team_abbreviation) %>%
+    slice_sample(prop = 1, replace = FALSE) %>%
+    pull(team_abbreviation)
+
+  history %>%
+    mutate(
+      team_abbreviation = factor(team_abbreviation, levels = team_levels)
+    ) %>%
+    ggplot(aes(
+      x = gameweek_number,
+      y = playoff_pct,
+      color = team_abbreviation,
+      group = team_abbreviation
+    )) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 2) +
+    geom_hline(
+      yintercept = 50,
+      linetype = "dashed",
+      color = "gray50",
+      alpha = 0.7
+    ) +
+    scale_y_continuous(
+      limits = c(0, 100),
+      labels = scales::percent_format(scale = 1)
+    ) +
+    scale_color_viridis_d(option = "turbo") +
+    labs(
+      title = "Playoff Probability Over Time",
+      x = "Gameweek",
+      y = "Playoff Probability (%)",
+      color = NULL
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+
+plot_rank_distributions <- function(
+  rank_dist,
+  n_ranks = 9,
+  title = "Final Table Position Distributions",
+  subtitle = "1,000,000 Simulated Seasons | USL Super League"
+) {
+  rank_dist_complete <- rank_dist |>
+    tidyr::complete(
+      team_abbreviation,
+      rank = seq_len(n_ranks),
+      fill = list(count = 0, pct = 0)
+    )
+
+  team_order <- rank_dist_complete |>
+    summarise(mean_rank = weighted.mean(rank, pct), .by = team_abbreviation) |>
+    arrange(desc(mean_rank)) |>
+    pull(team_abbreviation)
+
+  rank_dist_complete |>
+    mutate(
+      team_abbreviation = factor(team_abbreviation, levels = rev(team_order))
+    ) |>
+    ggplot(aes(x = rank, y = pct, fill = team_abbreviation)) +
+    geom_col(width = 1, alpha = 0.8) +
+    geom_segment(
+      aes(x = rank - 0.5, xend = rank + 0.5, y = pct, yend = pct),
+      linewidth = 0.4
+    ) +
+    annotate(
+      "rect",
+      xmin = 0.5,
+      xmax = 4.5,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = "green",
+      alpha = 0.05
+    ) +
+    scale_fill_viridis_d(option = "viridis", guide = "none") +
+    scale_x_continuous(breaks = seq_len(n_ranks)) +
+    scale_y_continuous(labels = scales::percent) +
+    facet_wrap(~team_abbreviation, ncol = 1, strip.position = "left") +
+    theme_ridges(grid = TRUE) +
+    theme(
+      strip.background = element_blank(),
+      strip.text.y.left = element_text(angle = 0),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.spacing = unit(0, "lines")
+    ) +
+    labs(
+      title = title,
+      subtitle = subtitle,
+      x = glue::glue("Final Rank (1st to {n_ranks}th)"),
+      y = NULL
+    )
+}
+
+
+plot_cutoff_distribution <- function(cutoff_dist, current_standings = NULL) {
+  p <- cutoff_dist %>%
+    rename(playoff_line_pts = points) %>%
+    mutate(playoff_line_pts = as.integer(playoff_line_pts)) %>%
+    ggplot() +
+    geom_col(aes(x = playoff_line_pts, y = count)) +
+    labs(
+      title = "Distribution of 4th Place Point Totals",
+      x = "Points Required for 4th Place",
+      y = "Frequency",
+      subtitle = "Sampled Over 1,000,000 Simulations"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(face = "bold"))
+
+  if (!is.null(current_standings) && nrow(current_standings) >= 4) {
+    fourth_pts <- sort(current_standings$current_points, decreasing = TRUE)[4]
+    p <- p +
+      geom_vline(
+        xintercept = fourth_pts,
+        color = "darkred",
+        linetype = "dashed",
+        linewidth = 1
+      ) +
+      annotate(
+        "text",
+        x = fourth_pts,
+        y = max(cutoff_dist$count) * 0.95,
+        label = sprintf("Current 4th: %d pts", fourth_pts),
+        hjust = -0.05,
+        color = "darkred",
+        size = 4
+      )
+  }
+  p
 }
 
 plot_scoreline_distributions <- function(scoreline_dist, ncol = 3) {
   scoreline_dist %>%
     mutate(home_loss = away_goals > home_goals) %>%
     ggplot(aes(x = away_goals, y = home_goals, fill = prob)) +
-    geom_tile(aes(color = home_loss, linewidth = home_loss)) +
-    geom_text(aes(label = scales::percent(prob, accuracy = 0.1)),
-              size = 2.8, color = "white", fontface = "bold") +
-    scale_color_manual(values = c("TRUE" = "black", "FALSE" = "white"), guide = "none") +
-    scale_linewidth_manual(values = c("TRUE" = 1.2, "FALSE" = 0.3), guide = "none") +
-    facet_wrap(~ matchup, ncol = ncol) +
-    scale_fill_gradient(low = "#1a1a2e", high = "#e94560",
-                        labels = scales::percent, name = "Probability") +
+    geom_tile(aes(linewidth = home_loss), color = "gray30") +
+    scale_linewidth_manual(
+      values = c("TRUE" = 1.2, "FALSE" = 0.3),
+      guide = "none"
+    ) +
+    geom_shadowtext(
+      aes(label = scales::percent(prob, accuracy = 0.1)),
+      color = "white",
+      bg.color = "black",
+      bg.r = 0.1,
+      size = 4,
+      fontface = "bold"
+    ) +
+    facet_wrap(~matchup, ncol = ncol) +
+    scale_fill_viridis_c(
+      option = "inferno",
+      labels = scales::percent,
+      name = "Probability"
+    ) +
     scale_x_continuous(breaks = 0:5, expand = c(0, 0)) +
     scale_y_continuous(breaks = 0:5, expand = c(0, 0)) +
     labs(
       title = "Scoreline Probability Distributions",
-      subtitle = paste0("Home team on Y-axis | Based on Poisson simulation"),
+      subtitle = "Home team on Y-axis | Based on Poisson simulation",
       x = "Away Goals",
       y = "Home Goals"
     ) +
