@@ -38,6 +38,23 @@ message(sprintf(
 con <- get_db_conn()
 on.exit(dbDisconnect(con), add = TRUE)
 
+# ── Skip if no new games since last run ────────────────────────────────────────
+last_games_played <- dbGetQuery(con,
+  "SELECT games_played FROM simulation_runs ORDER BY run_id DESC LIMIT 1"
+)$games_played
+
+current_games_completed <- dbGetQuery(con,
+  "SELECT COUNT(*) AS n FROM schedule WHERE is_completed = TRUE AND season = '2025-26'"
+)$n
+
+if (length(last_games_played) > 0 && current_games_completed == last_games_played) {
+  message(sprintf(
+    "[%s] No new games since last run (%d completed). Skipping.",
+    Sys.time(), current_games_completed
+  ))
+  quit(status = 0)
+}
+
 asa_client <- AmericanSoccerAnalysis$new()
 teams <- suppressMessages(asa_client$get_teams(leagues = 'usls'))
 schedule <- get_schedule(con = con)

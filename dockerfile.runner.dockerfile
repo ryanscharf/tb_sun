@@ -24,8 +24,8 @@ RUN chmod +x /docker-entrypoint.sh \
              /home/r-environment/run_playoff_simulation.sh \
              /startup_playoff.sh
 
-# Run Monday and Thursday at 3 AM Eastern (TZ set above)
-RUN echo "0 3 * * 1,4 /home/r-environment/run_playoff_simulation.sh >> /var/log/playoff_cron.log 2>&1" \
+# Run nightly at 3 AM Eastern (TZ set above); script skips if no new games
+RUN echo "0 3 * * * /home/r-environment/run_playoff_simulation.sh >> /var/log/playoff_cron.log 2>&1" \
     > /etc/cron.d/playoff-cron && \
     chmod 0644 /etc/cron.d/playoff-cron && \
     crontab /etc/cron.d/playoff-cron
