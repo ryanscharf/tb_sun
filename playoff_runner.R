@@ -50,7 +50,7 @@ current_games_completed <- dbGetQuery(con,
 if (length(last_games_played) > 0 && current_games_completed == last_games_played) {
   message(sprintf(
     "[%s] No new games since last run (%d completed). Skipping.",
-    Sys.time(), current_games_completed
+    Sys.time(), as.integer(current_games_completed)
   ))
   quit(status = 0)
 }
