@@ -151,7 +151,6 @@ ui <- page_sidebar(
       open = FALSE,
       accordion_panel(
         "Latest Run",
-        icon = bsicons::bs_icon("clock-history"),
         uiOutput("run_info"),
         hr(),
         actionButton(
@@ -163,11 +162,12 @@ ui <- page_sidebar(
       ),
       accordion_panel(
         "About the Model",
-        icon = bsicons::bs_icon("info-circle"),
         div(
           class = "small",
           p(
-            "This tool uses a ", strong("Monte Carlo simulation"), " —
+            "This tool uses a ",
+            strong("Monte Carlo simulation"),
+            " —
             a technique that runs the remaining season thousands of times
             using probability and randomness — to estimate each team's
             chances of reaching the playoffs."
@@ -184,7 +184,9 @@ ui <- page_sidebar(
             "For every remaining match, the model calculates an expected
             goal tally for each side — factoring in the opponent's
             strength and a home-field advantage. Goals are then drawn
-            from a ", strong("Poisson distribution"), ", a statistical
+            from a ",
+            strong("Poisson distribution"),
+            ", a statistical
             tool well-suited for rare, independent events like goals in
             soccer."
           ),
@@ -199,7 +201,9 @@ ui <- page_sidebar(
             "A team's playoff probability is the share of simulations in
             which they finish in a qualifying position. If a team makes
             the playoffs in 73,000 of 100,000 simulations, their odds
-            are ", strong("73%"), "."
+            are ",
+            strong("73%"),
+            "."
           ),
           h6("Limitations", class = "mt-3 mb-1 fw-bold"),
           p(
