@@ -58,10 +58,18 @@ get_schedule <- function(league_id = "10699", season = "2025-26", con = NULL) {
     # but a new date exists for the same matchup. Anti-join avoids many-to-many
     # issues when teams meet more than once in a season.
     fotmob_keys <- fotmob_schedule %>% select(home_team, away_team, date_utc)
-    db_keys     <- db_schedule      %>% select(home_team, away_team, date_utc)
+    db_keys <- db_schedule %>% select(home_team, away_team, date_utc)
 
-    removed_games <- anti_join(db_keys,     fotmob_keys, by = c("home_team", "away_team", "date_utc"))
-    added_games   <- anti_join(fotmob_keys, db_keys,     by = c("home_team", "away_team", "date_utc"))
+    removed_games <- anti_join(
+      db_keys,
+      fotmob_keys,
+      by = c("home_team", "away_team", "date_utc")
+    )
+    added_games <- anti_join(
+      fotmob_keys,
+      db_keys,
+      by = c("home_team", "away_team", "date_utc")
+    )
 
     rescheduled_keys <- inner_join(
       added_games,
@@ -437,7 +445,10 @@ calculate_playoff_odds_fast <- function(
   n_cores = 6
 ) {
   message("Fetching official scores from ASA API...")
-  asa_games <- suppressMessages(asa_client$get_games(leagues = 'usls', season = '2025-26')) %>%
+  asa_games <- suppressMessages(asa_client$get_games(
+    leagues = 'usls',
+    season = '2025-26'
+  )) %>%
     lazy_dt() %>%
     mutate(date_only = as.Date(date_time_utc)) %>%
     as_tibble()
