@@ -15,6 +15,7 @@ Automated data pipeline and playoff modeling for Tampa Bay Sun FC (USL Super Lea
 | `playoff_modeling.R` | Interactive modeling script for local use — sources `functions.R`, runs Monte Carlo simulations (1M sims), and produces visualizations |
 | `playoff_runner.R` | Production runner — sources `functions.R`, reads config from environment variables, and writes results to Postgres |
 | `backfill_runner.R` | Backfill runner — sources `functions.R`, iterates through historical gameweeks, and populates Postgres with historical simulation results |
+| `app.R` | Shiny app — connects to Postgres and visualizes playoff odds, match probabilities, scoreline distributions, rank distributions, and historical trends |
 | `progress.R` | Scratch/exploratory script |
 | `test_scraper.R` | Scratch/testing script |
 
@@ -31,9 +32,9 @@ Automated data pipeline and playoff modeling for Tampa Bay Sun FC (USL Super Lea
 
 | File | Role |
 |------|------|
-| `Dockerfile.runner` | Builds the playoff runner image based on `rocker/r-base` — installs simulation dependencies and sets a Mon/Thu 3 AM cron |
+| `playoff_runner.dockerfile` | Builds the playoff runner image based on `rocker/r-ver:4.5.3` — installs simulation dependencies and sets a nightly 3 AM cron |
 | `startup_playoff.sh` | Container entrypoint — optionally runs the simulation on startup, then starts cron |
-| `run_playoff_simulation.sh` | Shell script invoked by cron — clones the latest repo, copies `playoff_runner.R`, and runs it |
+| `run_playoff_simulation.sh` | Shell script invoked by cron — clones the latest repo, copies `playoff_runner.R`, and runs it. Exits early if no new games have completed since the last run |
 
 ### Infrastructure
 
