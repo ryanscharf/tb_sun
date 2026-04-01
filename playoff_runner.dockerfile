@@ -1,18 +1,19 @@
-FROM rocker/r-base
+FROM rocker/r-ver:4.5.3
 
 ENV TZ=America/New_York
 
-RUN apt-get update -qq && apt-get install -y \
+RUN apt-get update && apt-get install -y \
     cron \
     git \
     libpq-dev \
     libssl-dev \
-    libcurl4-openssl-dev \
     libxml2-dev \
+    libcurl4t64 \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN R -e "install.packages('pak', repos='https://cloud.r-project.org/')"
-RUN R -e "pak::pkg_install(c('tidyverse','itscalledsoccer','mirai','data.table','dtplyr','httr2','jsonlite','DBI','RPostgres'))"
+RUN R -e "pak::pkg_install(c('tidyverse','itscalledsoccer','mirai','data.table','dtplyr','httr2','jsonlite','DBI','RPostgres','tictoc','carrier'))"
 
 WORKDIR /home/r-environment
 

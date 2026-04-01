@@ -11,7 +11,7 @@ on:
       - 'run_scraper.sh'
       - 'startup.sh'
       - 'playoff_runner.R'
-      - 'Dockerfile.runner'
+      - 'playoff_runner.dockerfile'
       - 'run_playoff_simulation.sh'
       - 'startup_playoff.sh'
       - '.github/workflows/docker-build.yml'
@@ -90,7 +90,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.runner
+          file: playoff_runner.dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
