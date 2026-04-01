@@ -38,14 +38,18 @@ message(sprintf(
 con <- get_db_conn()
 on.exit(dbDisconnect(con), add = TRUE)
 
+asa_client <- AmericanSoccerAnalysis$new()
+teams <- suppressMessages(asa_client$get_teams(leagues = 'usls'))
+
+# Sync schedule from FotMob first so is_completed is current
+schedule <- get_schedule(con = con)
+
 # ── Skip if no new games since last run ────────────────────────────────────────
 last_games_played <- dbGetQuery(con,
   "SELECT games_played FROM simulation_runs ORDER BY run_id DESC LIMIT 1"
 )$games_played
 
-current_games_completed <- dbGetQuery(con,
-  "SELECT COUNT(*) AS n FROM schedule WHERE is_completed = TRUE AND season = '2025-26'"
-)$n
+current_games_completed <- sum(schedule$is_completed, na.rm = TRUE)
 
 if (length(last_games_played) > 0 && current_games_completed == last_games_played) {
   message(sprintf(
@@ -54,10 +58,6 @@ if (length(last_games_played) > 0 && current_games_completed == last_games_playe
   ))
   quit(status = 0)
 }
-
-asa_client <- AmericanSoccerAnalysis$new()
-teams <- suppressMessages(asa_client$get_teams(leagues = 'usls'))
-schedule <- get_schedule(con = con)
 
 output <- calculate_playoff_odds_fast(
   schedule,
