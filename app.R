@@ -220,7 +220,13 @@ ui <- page_sidebar(
   navset_card_underline(
     nav_panel("Playoff Odds", plotOutput("odds_plot", height = "500px")),
     nav_panel("Uncertainty", tableOutput("uncertainty_table")),
-    nav_panel("Match Probabilities", tableOutput("match_probs_table")),
+    nav_panel(
+      "Match Probabilities",
+      fluidRow(
+        column(4, selectInput("match_probs_team", "Filter by Team", choices = c("All Teams" = ""), selected = ""))
+      ),
+      tableOutput("match_probs_table")
+    ),
     nav_panel("Historical Trends", plotOutput("trends_plot", height = "500px")),
     nav_panel(
       "Score Matrix",
@@ -287,11 +293,25 @@ server <- function(input, output, session) {
     bordered = TRUE
   )
 
+  observeEvent(data(), {
+    d <- data()
+    if (nrow(d$match_probs) > 0) {
+      teams <- sort(unique(c(d$match_probs$home_team_abbr, d$match_probs$away_team_abbr)))
+      updateSelectInput(session, "match_probs_team",
+        choices = c("All Teams" = "", teams)
+      )
+    }
+  })
+
   output$match_probs_table <- renderTable(
     {
       d <- data()
       req(nrow(d$match_probs) > 0)
-      table_match_probs(d$match_probs)
+      mp <- d$match_probs
+      if (nzchar(input$match_probs_team)) {
+        mp <- mp %>% filter(home_team_abbr == input$match_probs_team | away_team_abbr == input$match_probs_team)
+      }
+      table_match_probs(mp)
     },
     striped = TRUE,
     hover = TRUE,
