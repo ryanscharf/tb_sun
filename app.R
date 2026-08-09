@@ -1,22 +1,9 @@
 library(shiny)
 library(bslib)
-
-# Load .env if present (local dev on Windows)
-if (file.exists(".env")) {
-  lines <- readLines(".env")
-  lines <- lines[!grepl("^\\s*#", lines) & nzchar(trimws(lines))]
-  for (line in lines) {
-    kv <- strsplit(line, "=", fixed = TRUE)[[1]]
-    if (length(kv) >= 2) {
-      key <- trimws(kv[1])
-      val <- trimws(paste(kv[-1], collapse = "="))
-      do.call(Sys.setenv, setNames(list(val), key))
-    }
-  }
-}
 library(tidyverse)
 library(DBI)
 library(RPostgres)
+library(jsonlite)
 library(shadowtext)
 library(ggridges)
 source("functions.R")
@@ -33,21 +20,98 @@ get_db_conn <- function() {
   )
 }
 
-load_db_data <- function() {
+get_model_versions <- function() {
+  con <- get_db_conn()
+  on.exit(dbDisconnect(con))
+  dbGetQuery(
+    con,
+    "
+    SELECT model_version_id, version, label, description, is_default, citations
+    FROM model_versions
+    WHERE is_active = TRUE
+    ORDER BY model_version_id
+  "
+  )
+}
+
+# Seasons with data for this model version, most-recently-active first (so
+# the season dropdown defaults to whatever season is actually current).
+get_seasons_for_version <- function(model_version_id) {
+  con <- get_db_conn()
+  on.exit(dbDisconnect(con))
+  dbGetQuery(
+    con,
+    sprintf(
+      "
+    SELECT season, MAX(run_at) AS latest_run_at
+    FROM simulation_runs
+    WHERE model_version_id = %d
+    GROUP BY season
+    ORDER BY latest_run_at DESC
+  ",
+      model_version_id
+    )
+  )
+}
+
+# The runner runs at the end of each game day, not once per gameweek, so a
+# gameweek can have several runs -- this is only the highest gameweek_number
+# reached, used to size the slider; load_db_data() below picks the latest
+# run *within* whichever gameweek is selected.
+get_max_gameweek <- function(model_version_id, season) {
+  con <- get_db_conn()
+  on.exit(dbDisconnect(con))
+  dbGetQuery(
+    con,
+    sprintf(
+      "
+    SELECT MAX(gw.gameweek_number) AS max_gw
+    FROM simulation_runs sr
+    JOIN gameweeks gw ON sr.gameweek_id = gw.gameweek_id
+    WHERE sr.model_version_id = %d AND sr.season = '%s'
+  ",
+      model_version_id,
+      season
+    )
+  )$max_gw
+}
+
+load_db_data <- function(model_version_id, season, gameweek_number) {
   con <- get_db_conn()
   on.exit(dbDisconnect(con))
 
+  # Multiple runs can share a gameweek_number (one per game day within that
+  # calendar week) -- take the latest one, i.e. the state as of that
+  # gameweek's most recently processed game day.
   run <- dbGetQuery(
     con,
-    "
-    SELECT sr.run_id, sr.run_at, sr.n_sims, sr.games_played, sr.games_remaining,
+    sprintf(
+      "
+    SELECT sr.run_id, sr.run_at, sr.season, sr.n_sims, sr.games_played, sr.games_remaining,
            gw.gameweek_number
     FROM simulation_runs sr
-    LEFT JOIN gameweeks gw ON sr.gameweek_id = gw.gameweek_id
+    JOIN gameweeks gw ON sr.gameweek_id = gw.gameweek_id
+    WHERE sr.model_version_id = %d AND sr.season = '%s' AND gw.gameweek_number = %d
     ORDER BY sr.run_at DESC
     LIMIT 1
-  "
+  ",
+      model_version_id,
+      season,
+      gameweek_number
+    )
   )
+
+  if (nrow(run) == 0) {
+    return(list(
+      run = run,
+      odds = run,
+      match_probs = run,
+      history = run,
+      scoreline_dist = run,
+      rank_dist = run,
+      cutoff_dist = run
+    ))
+  }
 
   odds <- dbGetQuery(
     con,
@@ -78,15 +142,36 @@ load_db_data <- function() {
     )
   )
 
+  # Scoped to the currently selected season AND capped at the selected
+  # gameweek -- gameweek_number resets to 1 each new season (so without the
+  # season filter, different seasons' early gameweeks would overlay at the
+  # same x-axis position), and capping at gameweek_number keeps the "scrub
+  # back in time" slider from revealing gameweeks after the one selected.
   history <- dbGetQuery(
     con,
-    "
-    SELECT po.team_abbreviation, po.playoff_pct, gw.gameweek_number
+    sprintf(
+      "
+    SELECT
+      po.team_abbreviation,
+      po.playoff_pct,
+      gw.gameweek_number,
+      sr.run_at::date AS run_date,
+      COALESCE(
+        po.games_played > LAG(po.games_played) OVER (
+          PARTITION BY po.team_abbreviation ORDER BY sr.run_at
+        ),
+        po.games_played > 0
+      ) AS played_today
     FROM playoff_odds po
     JOIN simulation_runs sr ON po.run_id = sr.run_id
     JOIN gameweeks gw ON sr.gameweek_id = gw.gameweek_id
-    ORDER BY gw.gameweek_number
-  "
+    WHERE sr.model_version_id = %d AND sr.season = '%s' AND gw.gameweek_number <= %d
+    ORDER BY sr.run_at, po.team_abbreviation
+  ",
+      model_version_id,
+      run$season[1],
+      gameweek_number
+    )
   )
 
   scoreline_dist <- dbGetQuery(
@@ -147,6 +232,19 @@ ui <- page_sidebar(
 
   sidebar = sidebar(
     open = FALSE,
+    selectInput("model_version", "Model Version", choices = NULL),
+    uiOutput("model_version_description"),
+    hr(),
+    selectInput("season", "Season", choices = NULL),
+    sliderInput(
+      "gameweek",
+      "Gameweek",
+      min = 1,
+      max = 1,
+      value = 1,
+      step = 1
+    ),
+    hr(),
     accordion(
       open = FALSE,
       accordion_panel(
@@ -223,7 +321,15 @@ ui <- page_sidebar(
     nav_panel(
       "Match Probabilities",
       fluidRow(
-        column(4, selectInput("match_probs_team", "Filter by Team", choices = c("All Teams" = ""), selected = ""))
+        column(
+          4,
+          selectInput(
+            "match_probs_team",
+            "Filter by Team",
+            choices = c("All Teams" = ""),
+            selected = ""
+          )
+        )
       ),
       tableOutput("match_probs_table")
     ),
@@ -245,10 +351,105 @@ ui <- page_sidebar(
 
 # ── Server ─────────────────────────────────────────────────────────────────────
 server <- function(input, output, session) {
-  data <- reactiveVal(load_db_data())
+  model_versions <- get_model_versions()
+  data <- reactiveVal(NULL)
+
+  observe({
+    req(nrow(model_versions) > 0)
+    default_idx <- which(model_versions$is_default)[1]
+    if (is.na(default_idx)) {
+      default_idx <- 1
+    }
+    default_id <- model_versions$model_version_id[default_idx]
+    updateSelectInput(
+      session,
+      "model_version",
+      choices = setNames(model_versions$model_version_id, model_versions$label),
+      selected = default_id
+    )
+  })
+
+  # Cascade: model_version -> season choices -> gameweek slider bounds.
+  # Data loading itself is handled separately below by a plain observe() so
+  # it reacts to any of the three inputs changing, not just the last one in
+  # this chain (see comment there for why that distinction matters).
+  observeEvent(input$model_version, {
+    req(input$model_version)
+    seasons <- get_seasons_for_version(as.integer(input$model_version))
+    req(nrow(seasons) > 0)
+    # seasons is ordered most-recently-active first, so this defaults to
+    # whichever season is actually current.
+    updateSelectInput(
+      session,
+      "season",
+      choices = seasons$season,
+      selected = seasons$season[1]
+    )
+  })
+
+  # Depends on BOTH model_version and season, not just season -- different
+  # model versions can have different gameweek coverage for the same season
+  # (e.g. a preset activated partway through the season has fewer gameweeks
+  # of history than one that's been running since day one), so switching
+  # model_version while the season string happens to stay the same still
+  # needs to re-check the gameweek bounds, not just when season itself changes.
+  observeEvent(list(input$model_version, input$season), {
+    req(input$model_version, input$season)
+    max_gw <- get_max_gameweek(as.integer(input$model_version), input$season)
+    req(!is.na(max_gw))
+    updateSliderInput(session, "gameweek", min = 1, max = max_gw, value = max_gw)
+  })
+
+  # Plain observe(), not observeEvent() -- reacts to a change in ANY of the
+  # three inputs (not just the last one in the cascade), so switching
+  # model_version reloads data immediately even in the edge case above where
+  # season/gameweek don't end up changing.
+  observe({
+    req(input$model_version, input$season, input$gameweek)
+    data(load_db_data(as.integer(input$model_version), input$season, input$gameweek))
+  })
 
   observeEvent(input$refresh, {
-    data(load_db_data())
+    req(input$model_version, input$season, input$gameweek)
+    data(load_db_data(as.integer(input$model_version), input$season, input$gameweek))
+  })
+
+  output$model_version_description <- renderUI({
+    req(input$model_version)
+    mv <- model_versions[
+      model_versions$model_version_id == as.integer(input$model_version),
+    ]
+    req(nrow(mv) > 0)
+
+    citations <- tryCatch(
+      jsonlite::fromJSON(mv$citations[1]),
+      error = function(e) NULL
+    )
+
+    citation_tags <- if (!is.null(citations) && is.data.frame(citations) && nrow(citations) > 0) {
+      tagList(
+        p(class = "small text-muted mb-1 mt-2", strong("References:")),
+        tags$ul(
+          class = "small text-muted ps-3 mb-0",
+          lapply(seq_len(nrow(citations)), function(i) {
+            tags$li(
+              tags$a(
+                href = citations$url[i], target = "_blank", rel = "noopener",
+                sprintf("%s (%d)", citations$authors[i], citations$year[i])
+              ),
+              sprintf(" — %s", citations$title[i])
+            )
+          })
+        )
+      )
+    } else {
+      NULL
+    }
+
+    tagList(
+      p(class = "small text-muted", mv$description[1]),
+      citation_tags
+    )
   })
 
   output$run_info <- renderUI({
@@ -256,6 +457,7 @@ server <- function(input, output, session) {
     req(nrow(d$run) > 0)
     r <- d$run
     tagList(
+      p(class = "small mb-1", strong("Season: "), r$season),
       p(class = "small mb-1", strong("Gameweek: "), r$gameweek_number),
       p(
         class = "small mb-1",
@@ -296,8 +498,13 @@ server <- function(input, output, session) {
   observeEvent(data(), {
     d <- data()
     if (nrow(d$match_probs) > 0) {
-      teams <- sort(unique(c(d$match_probs$home_team_abbr, d$match_probs$away_team_abbr)))
-      updateSelectInput(session, "match_probs_team",
+      teams <- sort(unique(c(
+        d$match_probs$home_team_abbr,
+        d$match_probs$away_team_abbr
+      )))
+      updateSelectInput(
+        session,
+        "match_probs_team",
         choices = c("All Teams" = "", teams)
       )
     }
@@ -309,7 +516,11 @@ server <- function(input, output, session) {
       req(nrow(d$match_probs) > 0)
       mp <- d$match_probs
       if (nzchar(input$match_probs_team)) {
-        mp <- mp %>% filter(home_team_abbr == input$match_probs_team | away_team_abbr == input$match_probs_team)
+        mp <- mp %>%
+          filter(
+            home_team_abbr == input$match_probs_team |
+              away_team_abbr == input$match_probs_team
+          )
       }
       table_match_probs(mp)
     },
