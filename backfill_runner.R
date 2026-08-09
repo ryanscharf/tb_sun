@@ -27,6 +27,14 @@ get_db_conn <- function() {
 N_SIMS <- as.integer(Sys.getenv("N_SIMS", "1000000"))
 N_CORES <- as.integer(Sys.getenv("N_CORES", "4"))
 
+# GPU path (simulate_season_gpu/simulate_season_gpu_dc) validated against a
+# corrected CPU reference via validate_gpu_dc_vs_cpu() -- max playoff_pct
+# diff 0.481%, max scoreline-cell diff 0.494% at n_sims=100K. Falls back to
+# CPU automatically if torch/CUDA aren't available in this environment.
+USE_GPU <- as.logical(Sys.getenv("USE_GPU", "TRUE")) &&
+  requireNamespace("torch", quietly = TRUE) &&
+  isTRUE(tryCatch(torch::cuda_is_available(), error = function(e) FALSE))
+
 # Seasons to backfill. USL Super League's season labels aren't sequential
 # (2024-25, 2025-26, Fall 2026, 2027, ...) so this is an explicit list, not
 # something inferred from the current season.
@@ -36,11 +44,12 @@ BACKFILL_SEASONS <- trimws(strsplit(
 )[[1]])
 
 message(sprintf(
-  "[%s] Starting backfill (seasons: %s, %s sims, %d cores)",
+  "[%s] Starting backfill (seasons: %s, %s sims, %d cores, GPU: %s)",
   Sys.time(),
   paste(BACKFILL_SEASONS, collapse = ", "),
   format(N_SIMS, big.mark = ","),
-  N_CORES
+  N_CORES,
+  USE_GPU
 ))
 
 asa_client <- AmericanSoccerAnalysis$new()
@@ -310,7 +319,8 @@ for (season in BACKFILL_SEASONS) {
         qualify_top_n = 4L,
         feature_flags = mv_flags,
         league_params = day_league_params,
-        season = season
+        season = season,
+        use_gpu = USE_GPU
       )
 
       played_games <- output$played_games

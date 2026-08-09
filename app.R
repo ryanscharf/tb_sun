@@ -12,7 +12,7 @@ source("functions.R")
 get_db_conn <- function() {
   dbConnect(
     RPostgres::Postgres(),
-    host = Sys.getenv("DB_HOST", "***REMOVED***"),
+    host = Sys.getenv("DB_HOST"),
     port = as.integer(Sys.getenv("DB_PORT", "5432")),
     dbname = Sys.getenv("DB_NAME"),
     user = Sys.getenv("DB_USERNAME"),

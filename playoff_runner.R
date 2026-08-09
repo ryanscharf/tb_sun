@@ -28,17 +28,26 @@ get_db_conn <- function() {
 N_SIMS <- as.integer(Sys.getenv("N_SIMS", "1000000"))
 N_CORES <- as.integer(Sys.getenv("N_CORES", "4"))
 
+# GPU path (simulate_season_gpu/simulate_season_gpu_dc) validated against a
+# corrected CPU reference via validate_gpu_dc_vs_cpu() -- max playoff_pct
+# diff 0.481%, max scoreline-cell diff 0.494% at n_sims=100K. Falls back to
+# CPU automatically if torch/CUDA aren't available in this environment.
+USE_GPU <- as.logical(Sys.getenv("USE_GPU", "FALSE")) &&
+  requireNamespace("torch", quietly = TRUE) &&
+  isTRUE(tryCatch(torch::cuda_is_available(), error = function(e) FALSE))
+
 # USL Super League's season labels aren't sequential (2024-25, 2025-26, Fall
 # 2026, 2027, ...) so this can't be safely auto-incremented in code -- set it
 # explicitly each season via the USL_SEASON env var.
 CURRENT_SEASON <- Sys.getenv("USL_SEASON", "2025-26")
 
 message(sprintf(
-  "[%s] Starting playoff simulation (season %s, %s sims, %d cores)",
+  "[%s] Starting playoff simulation (season %s, %s sims, %d cores, GPU: %s)",
   Sys.time(),
   CURRENT_SEASON,
   format(N_SIMS, big.mark = ","),
-  N_CORES
+  N_CORES,
+  USE_GPU
 ))
 
 con <- get_db_conn()
@@ -110,16 +119,31 @@ if (nrow(model_versions_df) == 0) {
 # since "today" naturally has no future games to leak in live -- but it also
 # guards against POOLED_SEASONS accidentally listing a season that hasn't
 # started yet).
-POOLED_SEASONS <- trimws(strsplit(Sys.getenv("POOLED_SEASONS", CURRENT_SEASON), ",")[[1]])
+POOLED_SEASONS <- trimws(strsplit(
+  Sys.getenv("POOLED_SEASONS", CURRENT_SEASON),
+  ","
+)[[1]])
 
-needs_league_params <- any(vapply(seq_len(nrow(model_versions_df)), function(i) {
-  flags <- jsonlite::fromJSON(model_versions_df$feature_flags[i])
-  isTRUE(flags$dixon_coles_tau) || isTRUE(flags$fitted_home_advantage)
-}, logical(1)))
+needs_league_params <- any(vapply(
+  seq_len(nrow(model_versions_df)),
+  function(i) {
+    flags <- jsonlite::fromJSON(model_versions_df$feature_flags[i])
+    isTRUE(flags$dixon_coles_tau) || isTRUE(flags$fitted_home_advantage)
+  },
+  logical(1)
+))
 
 league_params <- if (needs_league_params) {
-  message(sprintf("[%s] Fitting pooled league parameters across season(s): %s", Sys.time(), paste(POOLED_SEASONS, collapse = ", ")))
-  fit_pooled_league_params(POOLED_SEASONS, current_season = CURRENT_SEASON, cutoff_date = Sys.Date())
+  message(sprintf(
+    "[%s] Fitting pooled league parameters across season(s): %s",
+    Sys.time(),
+    paste(POOLED_SEASONS, collapse = ", ")
+  ))
+  fit_pooled_league_params(
+    POOLED_SEASONS,
+    current_season = CURRENT_SEASON,
+    cutoff_date = Sys.Date()
+  )
 } else {
   NULL
 }
@@ -148,7 +172,8 @@ for (mv_row in seq_len(nrow(model_versions_df))) {
     qualify_top_n = 4,
     feature_flags = mv_flags,
     league_params = league_params,
-    season = CURRENT_SEASON
+    season = CURRENT_SEASON,
+    use_gpu = USE_GPU
   )
   playoff_odds <- output$summary
   played_games <- output$played_games
@@ -352,10 +377,17 @@ elo_all_results <- suppressMessages(asa_client$get_games(
     status
   )
 
-elo_all_team_ids <- unique(c(elo_all_results$home_team_id, elo_all_results$away_team_id))
+elo_all_team_ids <- unique(c(
+  elo_all_results$home_team_id,
+  elo_all_results$away_team_id
+))
 
 season_pos <- match(CURRENT_SEASON, POOLED_SEASONS)
-prior_season <- if (!is.na(season_pos) && season_pos > 1) POOLED_SEASONS[season_pos - 1] else NA
+prior_season <- if (!is.na(season_pos) && season_pos > 1) {
+  POOLED_SEASONS[season_pos - 1]
+} else {
+  NA
+}
 
 elo_starting_ratings <- if (!is.na(prior_season)) {
   prior_elo <- dbGetQuery(
@@ -383,9 +415,18 @@ elo_history <- compute_elo_ratings(
 )
 
 write_elo_snapshot(
-  con, CURRENT_SEASON, gameweek_id,
-  elo_snapshot_at(elo_history, max(elo_all_results$date[elo_all_results$status == "FullTime"]), elo_all_team_ids) %>%
-    left_join(teams %>% select(team_id, team_name, team_abbreviation), by = "team_id")
+  con,
+  CURRENT_SEASON,
+  gameweek_id,
+  elo_snapshot_at(
+    elo_history,
+    max(elo_all_results$date[elo_all_results$status == "FullTime"]),
+    elo_all_team_ids
+  ) %>%
+    left_join(
+      teams %>% select(team_id, team_name, team_abbreviation),
+      by = "team_id"
+    )
 )
 
 message(sprintf("[%s] All presets complete.", Sys.time()))
