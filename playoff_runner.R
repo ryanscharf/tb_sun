@@ -101,6 +101,15 @@ if (nrow(model_versions_df) == 0) {
 # differently from attack/defense given the league's heavy YoY roster
 # turnover. Add each newly completed season's label as it becomes available;
 # this degrades gracefully to a single-season fit until then.
+#
+# POOLED_SEASONS must be in chronological order, ending with CURRENT_SEASON
+# -- fit_pooled_league_params() truncates CURRENT_SEASON's own games to
+# "as of today" (point-in-time correctness) and pools any earlier season in
+# full, so this run never has visibility into results that haven't happened
+# yet (matters more for backfill_runner.R's historical cutoffs than here,
+# since "today" naturally has no future games to leak in live -- but it also
+# guards against POOLED_SEASONS accidentally listing a season that hasn't
+# started yet).
 POOLED_SEASONS <- trimws(strsplit(Sys.getenv("POOLED_SEASONS", CURRENT_SEASON), ",")[[1]])
 
 needs_league_params <- any(vapply(seq_len(nrow(model_versions_df)), function(i) {
@@ -110,7 +119,7 @@ needs_league_params <- any(vapply(seq_len(nrow(model_versions_df)), function(i) 
 
 league_params <- if (needs_league_params) {
   message(sprintf("[%s] Fitting pooled league parameters across season(s): %s", Sys.time(), paste(POOLED_SEASONS, collapse = ", ")))
-  fit_pooled_league_params(POOLED_SEASONS)
+  fit_pooled_league_params(POOLED_SEASONS, current_season = CURRENT_SEASON, cutoff_date = Sys.Date())
 } else {
   NULL
 }
@@ -320,5 +329,63 @@ for (mv_row in seq_len(nrow(model_versions_df))) {
     run_id
   ))
 }
+
+# ── Elo ratings (independent of model_versions/presets) ────────────────────────
+# Computed once per run over the full current season in a single
+# chronological pass (fast, no simulation) -- see compute_elo_ratings() in
+# functions.R. Seeds from the season immediately prior to CURRENT_SEASON in
+# POOLED_SEASONS (same chronological list used for league_params above),
+# regressed toward the mean, if that prior season has any recorded ratings.
+message(sprintf("[%s] Computing Elo ratings...", Sys.time()))
+
+elo_all_results <- suppressMessages(asa_client$get_games(
+  leagues = 'usls',
+  season = CURRENT_SEASON
+)) %>%
+  as_tibble() %>%
+  transmute(
+    home_team_id,
+    away_team_id,
+    home_goals = home_score,
+    away_goals = away_score,
+    date = as.Date(date_time_utc),
+    status
+  )
+
+elo_all_team_ids <- unique(c(elo_all_results$home_team_id, elo_all_results$away_team_id))
+
+season_pos <- match(CURRENT_SEASON, POOLED_SEASONS)
+prior_season <- if (!is.na(season_pos) && season_pos > 1) POOLED_SEASONS[season_pos - 1] else NA
+
+elo_starting_ratings <- if (!is.na(prior_season)) {
+  prior_elo <- dbGetQuery(
+    con,
+    sprintf(
+      "SELECT DISTINCT ON (team_id) team_id, elo_rating
+       FROM elo_ratings WHERE season = '%s'
+       ORDER BY team_id, computed_at DESC",
+      prior_season
+    )
+  )
+  if (nrow(prior_elo) > 0) {
+    regress_elo_to_mean(setNames(prior_elo$elo_rating, prior_elo$team_id))
+  } else {
+    NULL
+  }
+} else {
+  NULL
+}
+
+elo_history <- compute_elo_ratings(
+  elo_all_results,
+  elo_all_team_ids,
+  starting_ratings = elo_starting_ratings
+)
+
+write_elo_snapshot(
+  con, CURRENT_SEASON, gameweek_id,
+  elo_snapshot_at(elo_history, max(elo_all_results$date[elo_all_results$status == "FullTime"]), elo_all_team_ids) %>%
+    left_join(teams %>% select(team_id, team_name, team_abbreviation), by = "team_id")
+)
 
 message(sprintf("[%s] All presets complete.", Sys.time()))

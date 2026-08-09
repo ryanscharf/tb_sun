@@ -76,6 +76,38 @@ get_max_gameweek <- function(model_version_id, season) {
   )$max_gw
 }
 
+# Elo has no model_version dimension -- loaded independently of the
+# model_version selector, only by season/gameweek (capped at the selected
+# gameweek, same "scrub back in time" behavior as Historical Trends).
+get_elo_data <- function(season, gameweek_number) {
+  con <- get_db_conn()
+  on.exit(dbDisconnect(con))
+
+  history <- dbGetQuery(
+    con,
+    sprintf(
+      "
+    SELECT er.team_id, er.team_name, er.team_abbreviation,
+           er.elo_rating, er.games_played,
+           gw.gameweek_number, gw.end_date AS gameweek_date
+    FROM elo_ratings er
+    JOIN gameweeks gw ON er.gameweek_id = gw.gameweek_id
+    WHERE er.season = '%s' AND gw.gameweek_number <= %d
+    ORDER BY gw.gameweek_number, er.team_abbreviation
+  ",
+      season,
+      gameweek_number
+    )
+  )
+
+  current <- history %>%
+    group_by(team_id) %>%
+    filter(gameweek_number == max(gameweek_number)) %>%
+    ungroup()
+
+  list(history = history, current = current)
+}
+
 load_db_data <- function(model_version_id, season, gameweek_number) {
   con <- get_db_conn()
   on.exit(dbDisconnect(con))
@@ -345,7 +377,13 @@ ui <- page_sidebar(
       "Rankings Distribution",
       plotOutput("rank_dist_plot", height = "500px")
     ),
-    nav_panel("Playoff Line", plotOutput("cutoff_dist_plot", height = "500px"))
+    nav_panel("Playoff Line", plotOutput("cutoff_dist_plot", height = "500px")),
+    nav_panel(
+      "Team Ratings",
+      plotOutput("elo_trends_plot", height = "500px"),
+      hr(),
+      tableOutput("elo_leaderboard_table")
+    )
   )
 )
 
@@ -413,6 +451,37 @@ server <- function(input, output, session) {
     req(input$model_version, input$season, input$gameweek)
     data(load_db_data(as.integer(input$model_version), input$season, input$gameweek))
   })
+
+  # Elo has no model_version dimension -- loaded independently of the
+  # model_version-driven cascade above, keyed only on season/gameweek.
+  elo_data <- reactiveVal(NULL)
+
+  observe({
+    req(input$season, input$gameweek)
+    elo_data(get_elo_data(input$season, input$gameweek))
+  })
+
+  observeEvent(input$refresh, {
+    req(input$season, input$gameweek)
+    elo_data(get_elo_data(input$season, input$gameweek))
+  })
+
+  output$elo_trends_plot <- renderPlot({
+    d <- elo_data()
+    req(nrow(d$history) > 0)
+    plot_elo_trends(d$history)
+  })
+
+  output$elo_leaderboard_table <- renderTable(
+    {
+      d <- elo_data()
+      req(nrow(d$current) > 0)
+      table_elo_leaderboard(d$current)
+    },
+    striped = TRUE,
+    hover = TRUE,
+    bordered = TRUE
+  )
 
   output$model_version_description <- renderUI({
     req(input$model_version)

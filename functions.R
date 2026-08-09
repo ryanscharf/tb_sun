@@ -640,8 +640,28 @@ diagnose_dc_tau <- function(completed_games, team_strengths, home_advantage = 0.
 # correctly accounted for before pooling -- this avoids conflating
 # season-to-season roster/competitiveness differences with the structural
 # parameters being estimated.
-fit_pooled_league_params <- function(seasons, xi = 0) {
-  per_season <- purrr::map_dfr(seasons, function(season) {
+#
+# Point-in-time correctness: `seasons` must be in chronological order.
+# Any season strictly before `current_season` is a completed season and is
+# pooled in full (its outcome was always fully known by the time
+# `current_season` started). `current_season` itself is truncated to
+# `date <= cutoff_date` -- otherwise a backfilled snapshot from, say,
+# gameweek 1 would be fit using rho/home_advantage informed by that same
+# season's games many months in the future, which a real-time observer on
+# that day could not have seen. Any season AFTER current_season in the
+# vector is dropped entirely for the same reason. Pass current_season = NULL
+# (or omit cutoff_date) to pool everything unrestricted -- only appropriate
+# for ad hoc/exploratory use where point-in-time realism doesn't matter.
+fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cutoff_date = NULL) {
+  usable_seasons <- seasons
+  if (!is.null(current_season)) {
+    season_idx <- match(current_season, seasons)
+    if (!is.na(season_idx)) {
+      usable_seasons <- seasons[seq_len(season_idx)]
+    }
+  }
+
+  per_season <- purrr::map_dfr(usable_seasons, function(season) {
     games <- tryCatch(
       suppressMessages(asa_client$get_games(leagues = "usls", season = season)) %>%
         as_tibble() %>%
@@ -656,6 +676,10 @@ fit_pooled_league_params <- function(seasons, xi = 0) {
         tibble()
       }
     )
+
+    if (!is.null(current_season) && !is.null(cutoff_date) && identical(season, current_season)) {
+      games <- games %>% filter(date <= cutoff_date)
+    }
 
     if (nrow(games) < 10) {
       return(NULL)
@@ -748,7 +772,7 @@ simulate_matches_dc <- function(remaining_games, team_strengths, n_sims, home_ad
 
   data.table(
     sim_id = rep(1:n_sims, each = n_games),
-    match_id = rep(1:n_games, times = n_sims),
+    match_id = rep(seq_len(n_games), times = n_sims),
     home_team_id = rep(remaining_games$home_team_id, times = n_sims),
     away_team_id = rep(remaining_games$away_team_id, times = n_sims),
     home_goals = as.vector(t(h_goals)),
@@ -919,7 +943,7 @@ simulate_matches_vectorized <- function(
 
   match_results <- data.table(
     sim_id = rep(1:n_sims, each = n_games),
-    match_id = rep(1:n_games, times = n_sims),
+    match_id = rep(seq_len(n_games), times = n_sims),
     home_team_id = rep(remaining_games$home_team_id, times = n_sims),
     away_team_id = rep(remaining_games$away_team_id, times = n_sims),
     home_goals = as.vector(t(h_goals)),
@@ -1068,7 +1092,10 @@ simulate_season_vectorized <- function(
   home_cols <- match(remaining_games$home_team_id, all_teams)
   away_cols <- match(remaining_games$away_team_id, all_teams)
 
-  for (g in 1:n_games) {
+  # seq_len(), not 1:n_games -- a completed season's final cutoff has 0
+  # remaining games, and 1:0 evaluates to c(1, 0) in R (not an empty
+  # sequence), which would index out of bounds on every vector here.
+  for (g in seq_len(n_games)) {
     final_pts[, home_cols[g]] <- final_pts[, home_cols[g]] + h_pts[, g]
     final_pts[, away_cols[g]] <- final_pts[, away_cols[g]] + a_pts[, g]
     final_gd[, home_cols[g]] <- final_gd[, home_cols[g]] + h_gd[, g]
@@ -1637,6 +1664,170 @@ get_scoreline_distributions <- function(
     )
 }
 
+# ── Elo rating tracker ─────────────────────────────────────────────────────────
+# Standalone from the Monte Carlo playoff-odds model above: Elo is a
+# different kind of artifact (an incrementally-updated power rating, not a
+# simulated probability), has no natural "preset" variants the way
+# time_decay_xi/dixon_coles_tau are variants of the same Poisson model, and
+# doesn't need the model_versions/feature_flags machinery. It has its own
+# table (elo_ratings) and its own tab in app.R.
+
+# Elo rating system for soccer, following the World Football Elo Ratings /
+# clubelo.com goal-difference-weighted methodology (academically validated
+# for football specifically by Hvattum & Arntzen 2010, already cited
+# elsewhere in this file for the Dixon-Coles pooling reasoning). Processes
+# `all_results` chronologically in a single pass -- no simulation, O(games),
+# fast even for a full season.
+#
+# `starting_ratings` (a named vector by team_id) lets the caller seed with a
+# prior season's regressed final ratings instead of a flat `initial_rating`
+# -- see regress_elo_to_mean() for the season-boundary handling.
+#
+# Returns a long-format history: one row per team per game played (their
+# rating immediately AFTER that game), plus `date` and `games_played`. Use
+# elo_snapshot_at() to extract a single-date snapshot from this for writing.
+compute_elo_ratings <- function(
+  all_results,
+  all_team_ids,
+  initial_rating = 1500,
+  k = 20,
+  home_advantage_elo = 60,
+  use_margin_of_victory = TRUE,
+  starting_ratings = NULL
+) {
+  ratings <- setNames(rep(initial_rating, length(all_team_ids)), all_team_ids)
+  if (!is.null(starting_ratings)) {
+    known <- intersect(names(starting_ratings), names(ratings))
+    ratings[known] <- starting_ratings[known]
+  }
+  games_played <- setNames(rep(0L, length(all_team_ids)), all_team_ids)
+
+  played <- all_results %>%
+    filter(status == "FullTime") %>%
+    arrange(date)
+
+  if (nrow(played) == 0) {
+    return(tibble(
+      date = as.Date(character()),
+      team_id = character(),
+      elo_rating = numeric(),
+      games_played = integer()
+    ))
+  }
+
+  history <- vector("list", nrow(played) * 2)
+  slot <- 1
+
+  for (i in seq_len(nrow(played))) {
+    g <- played[i, ]
+    home_id <- g$home_team_id
+    away_id <- g$away_team_id
+    r_home <- ratings[[home_id]]
+    r_away <- ratings[[away_id]]
+
+    expected_home <- 1 / (1 + 10^(-(r_home + home_advantage_elo - r_away) / 400))
+    gd <- g$home_goals - g$away_goals
+    actual_home <- if (gd > 0) 1 else if (gd == 0) 0.5 else 0
+
+    mov_mult <- if (use_margin_of_victory) {
+      agd <- abs(gd)
+      if (agd <= 1) 1 else if (agd == 2) 1.5 else (11 + agd) / 8
+    } else {
+      1
+    }
+
+    delta <- k * mov_mult * (actual_home - expected_home)
+
+    ratings[[home_id]] <- r_home + delta
+    ratings[[away_id]] <- r_away - delta
+    games_played[[home_id]] <- games_played[[home_id]] + 1L
+    games_played[[away_id]] <- games_played[[away_id]] + 1L
+
+    history[[slot]] <- tibble(
+      date = g$date,
+      team_id = home_id,
+      elo_rating = ratings[[home_id]],
+      games_played = games_played[[home_id]]
+    )
+    history[[slot + 1]] <- tibble(
+      date = g$date,
+      team_id = away_id,
+      elo_rating = ratings[[away_id]],
+      games_played = games_played[[away_id]]
+    )
+    slot <- slot + 2
+  }
+
+  bind_rows(history)
+}
+
+# Extracts each team's most recent Elo rating as of cutoff_date (or
+# initial_rating with 0 games if they haven't played yet) from
+# compute_elo_ratings()'s long-format history -- one row per team, used to
+# write a single gameweek snapshot into elo_ratings.
+elo_snapshot_at <- function(history, cutoff_date, all_team_ids, initial_rating = 1500) {
+  latest <- history %>%
+    filter(date <= cutoff_date) %>%
+    group_by(team_id) %>%
+    slice_max(date, n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  tibble(team_id = all_team_ids) %>%
+    left_join(latest, by = "team_id") %>%
+    mutate(
+      elo_rating = coalesce(elo_rating, initial_rating),
+      games_played = coalesce(games_played, 0L)
+    ) %>%
+    select(team_id, elo_rating, games_played)
+}
+
+# Season-boundary handling for Elo: regress a season's final ratings partway
+# back toward initial_rating rather than a hard reset or full carryover --
+# unlike the Poisson model's attack/defense (reset fully each season given
+# USL SL's roster churn -- see fit_team_strengths_dc()), Elo is primarily a
+# descriptive/historical tracker where continuity has real value, and its
+# update mechanism re-converges quickly regardless of roster turnover, so a
+# modest regression is enough. `final_ratings` is a named vector (team_id ->
+# rating); teams not present keep no entry and simply start fresh at
+# initial_rating via compute_elo_ratings()'s own default.
+regress_elo_to_mean <- function(final_ratings, initial_rating = 1500, regression = 1 / 3) {
+  final_ratings * (1 - regression) + initial_rating * regression
+}
+
+# Upserts one gameweek's worth of Elo snapshot rows (see elo_snapshot_at())
+# into the elo_ratings table, keyed on (season, gameweek_id, team_id).
+# Shared by playoff_runner.R (live) and backfill_runner.R (historical) so
+# both write via identical logic -- same staging-table-then-upsert pattern
+# get_schedule() already uses.
+# `snapshot` must include team_name/team_abbreviation (left_join against the
+# `teams` variable already available in both caller scripts) -- denormalized
+# into elo_ratings since this DB has no SQL teams table for app.R to join
+# against itself.
+write_elo_snapshot <- function(con, season, gameweek_id, snapshot) {
+  staging <- snapshot %>%
+    mutate(season = season, gameweek_id = gameweek_id)
+
+  dbWriteTable(
+    con, "elo_staging", staging,
+    temporary = TRUE, overwrite = TRUE, row.names = FALSE
+  )
+
+  dbExecute(
+    con,
+    "
+    INSERT INTO elo_ratings (season, gameweek_id, team_id, team_name, team_abbreviation, elo_rating, games_played)
+    SELECT season, gameweek_id, team_id, team_name, team_abbreviation, elo_rating, games_played FROM elo_staging
+    ON CONFLICT (season, gameweek_id, team_id)
+    DO UPDATE SET
+      elo_rating        = EXCLUDED.elo_rating,
+      games_played      = EXCLUDED.games_played,
+      team_name         = EXCLUDED.team_name,
+      team_abbreviation = EXCLUDED.team_abbreviation,
+      computed_at       = NOW()
+    "
+  )
+}
+
 plot_playoff_odds <- function(odds, run) {
   odds %>%
     mutate(team_abbreviation = fct_reorder(team_abbreviation, playoff_pct)) %>%
@@ -1764,6 +1955,57 @@ plot_trends <- function(history, seed = 42) {
     )
 }
 
+
+plot_elo_trends <- function(elo_history) {
+  team_levels <- elo_history %>%
+    distinct(team_abbreviation) %>%
+    pull(team_abbreviation)
+
+  color_map <- deframe(select(usl_sl_team_brands, team_abbreviation, primary))
+
+  gw_breaks <- elo_history %>%
+    distinct(gameweek_number, gameweek_date) %>%
+    arrange(gameweek_number)
+
+  elo_history %>%
+    mutate(team_abbreviation = factor(team_abbreviation, levels = team_levels)) %>%
+    ggplot(aes(
+      x = gameweek_date,
+      y = elo_rating,
+      color = team_abbreviation,
+      group = team_abbreviation
+    )) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.5) +
+    geom_hline(yintercept = 1500, linetype = "dashed", color = "gray50", alpha = 0.7) +
+    scale_x_date(breaks = gw_breaks$gameweek_date, labels = gw_breaks$gameweek_number) +
+    scale_color_manual(values = color_map) +
+    labs(
+      title = "Elo Rating Over Time",
+      subtitle = "1500 = league average at initialization",
+      x = "Gameweek",
+      y = "Elo Rating",
+      color = NULL
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+}
+
+table_elo_leaderboard <- function(current_elo) {
+  current_elo %>%
+    arrange(desc(elo_rating)) %>%
+    mutate(rank = row_number()) %>%
+    transmute(
+      Rank = rank,
+      Team = team_name,
+      Elo = sprintf("%.0f", elo_rating),
+      `Games Played` = games_played
+    )
+}
 
 plot_rank_distributions <- function(
   rank_dist,

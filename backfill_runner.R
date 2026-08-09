@@ -64,10 +64,12 @@ if (nrow(model_versions_df) == 0) {
 dbDisconnect(init_con)
 
 # ── League-level structural parameters (home advantage, Dixon-Coles rho) ───────
-# Computed once, pooled across every season being backfilled (not per
-# season/gameday/preset) -- see fit_pooled_league_params() in functions.R for
-# why these are treated as league-structural rather than roster-specific
-# given USL SL's heavy YoY roster turnover.
+# Recomputed per game-day below (NOT once globally) -- each day's backfilled
+# snapshot must only see results known as of that day. Seasons strictly
+# before the one being backfilled are pooled in full (fully known already);
+# the current season is truncated to date <= cutoff_date; any season listed
+# after the current one in BACKFILL_SEASONS is excluded entirely. See
+# fit_pooled_league_params() in functions.R.
 needs_league_params <- any(vapply(
   seq_len(nrow(model_versions_df)),
   function(i) {
@@ -77,16 +79,11 @@ needs_league_params <- any(vapply(
   logical(1)
 ))
 
-league_params <- if (needs_league_params) {
-  message(sprintf(
-    "[%s] Fitting pooled league parameters across: %s",
-    Sys.time(),
-    paste(BACKFILL_SEASONS, collapse = ", ")
-  ))
-  fit_pooled_league_params(BACKFILL_SEASONS)
-} else {
-  NULL
-}
+# Elo carries forward across seasons (regressed toward the mean -- see
+# regress_elo_to_mean()), unlike attack/defense which resets fully each
+# season -- see functions.R's Elo section for the reasoning. NULL for the
+# first season backfilled (nothing to carry forward from).
+carried_elo_ratings <- NULL
 
 # ── Backfill each season ────────────────────────────────────────────────────────
 for (season in BACKFILL_SEASONS) {
@@ -156,16 +153,29 @@ for (season in BACKFILL_SEASONS) {
     nrow(model_versions_df)
   ))
 
+  # Resumable: only insert gameweeks that aren't already there (a prior
+  # crashed/interrupted run may have already written some of this season's
+  # gameweeks) -- everything below is keyed off the DB's existing state
+  # rather than assuming a clean slate.
   con <- get_db_conn()
-  dbWriteTable(
+  existing_gw_numbers <- dbGetQuery(
     con,
-    "gameweeks",
-    gameweeks_df %>%
-      mutate(season = season) %>%
-      select(season, gameweek_number, start_date, end_date),
-    append = TRUE,
-    row.names = FALSE
-  )
+    sprintf("SELECT gameweek_number FROM gameweeks WHERE season = '%s'", season)
+  )$gameweek_number
+
+  new_gameweeks <- gameweeks_df %>% filter(!(gameweek_number %in% existing_gw_numbers))
+  if (nrow(new_gameweeks) > 0) {
+    dbWriteTable(
+      con,
+      "gameweeks",
+      new_gameweeks %>%
+        mutate(season = season) %>%
+        select(season, gameweek_number, start_date, end_date),
+      append = TRUE,
+      row.names = FALSE
+    )
+  }
+
   gameweeks_with_ids <- dbGetQuery(
     con,
     sprintf(
@@ -173,6 +183,34 @@ for (season in BACKFILL_SEASONS) {
       season
     )
   )
+
+  # (season, model_version_id, run_at::date) already written -- run_at is
+  # set to cutoff_date below via '{cutoff_date} 23:59:59 America/New_York'.
+  # Casting straight to ::date uses Postgres's SESSION timezone, not
+  # necessarily America/New_York -- if the session defaults to UTC, 23:59:59
+  # America/New_York lands after midnight UTC, so run_at::date silently
+  # comes back as cutoff_date + 1 and never matches, breaking the skip
+  # check entirely. `AT TIME ZONE 'America/New_York'` reconstructs the
+  # original wall-clock date regardless of session timezone.
+  existing_runs <- dbGetQuery(
+    con,
+    sprintf(
+      "SELECT model_version_id, (run_at AT TIME ZONE 'America/New_York')::date AS run_date FROM simulation_runs WHERE season = '%s'",
+      season
+    )
+  )
+  existing_run_keys <- if (nrow(existing_runs) > 0) {
+    paste(existing_runs$model_version_id, existing_runs$run_date)
+  } else {
+    character(0)
+  }
+  if (length(existing_run_keys) > 0) {
+    message(sprintf(
+      "Resuming: %d (game-day, preset) run(s) already written for season %s -- skipping those.",
+      length(existing_run_keys), season
+    ))
+  }
+
   dbDisconnect(con)
 
   # Map each played game-day to its gameweek_id.
@@ -190,6 +228,17 @@ for (season in BACKFILL_SEASONS) {
     ) %>%
     left_join(gameweeks_with_ids, by = "gameweek_number")
 
+  # ── Elo ratings (independent of model_versions/presets) ──────────────────────
+  # Computed once for the whole season in a single chronological pass (fast,
+  # no simulation) -- see compute_elo_ratings() in functions.R. Carries
+  # forward the prior season's final ratings, regressed toward the mean,
+  # rather than a flat 1500 start.
+  elo_history <- compute_elo_ratings(
+    all_results,
+    all_team_ids,
+    starting_ratings = carried_elo_ratings
+  )
+
   # ── Loop through each game day x each active model version preset ────────────
   for (day_idx in seq_along(played_dates)) {
     cutoff_date <- played_dates[day_idx]
@@ -197,10 +246,51 @@ for (season in BACKFILL_SEASONS) {
     gameweek_id <- as.integer(gw_row$gameweek_id[1])
     gw_number <- gw_row$gameweek_number[1]
 
+    # Written for every game day regardless of whether the simulation work
+    # below is skipped by resumability -- cheap, and a resumed run that
+    # skips most/all simulation presets for a day should still fully
+    # populate elo_ratings for it.
+    elo_con <- get_db_conn()
+    write_elo_snapshot(
+      elo_con, season, gameweek_id,
+      elo_snapshot_at(elo_history, cutoff_date, all_team_ids) %>%
+        left_join(teams %>% select(team_id, team_name, team_abbreviation), by = "team_id")
+    )
+    dbDisconnect(elo_con)
+
+    # Skip this day entirely (before any expensive computation, including
+    # the league-params fit below) if every active preset is already
+    # written for it -- resumability.
+    day_pending <- vapply(seq_len(nrow(model_versions_df)), function(mv_row) {
+      mv_id <- as.integer(model_versions_df$model_version_id[mv_row])
+      !(paste(mv_id, as.character(cutoff_date)) %in% existing_run_keys)
+    }, logical(1))
+
+    if (!any(day_pending)) {
+      next
+    }
+
+    # Point-in-time correctness: refit fresh for THIS cutoff_date so no
+    # day's backfilled snapshot has visibility into results that hadn't
+    # happened yet as of that day (see fit_pooled_league_params()).
+    day_league_params <- if (needs_league_params) {
+      fit_pooled_league_params(
+        BACKFILL_SEASONS,
+        current_season = season,
+        cutoff_date = cutoff_date
+      )
+    } else {
+      NULL
+    }
+
     for (mv_row in seq_len(nrow(model_versions_df))) {
       model_version_id <- as.integer(model_versions_df$model_version_id[mv_row])
       mv_label <- model_versions_df$label[mv_row]
       mv_flags <- jsonlite::fromJSON(model_versions_df$feature_flags[mv_row])
+
+      if (paste(model_version_id, as.character(cutoff_date)) %in% existing_run_keys) {
+        next
+      }
 
       message(sprintf(
         "[%s] %s | gameweek %d (%s) | %s",
@@ -219,7 +309,7 @@ for (season in BACKFILL_SEASONS) {
         n_cores = N_CORES,
         qualify_top_n = 4L,
         feature_flags = mv_flags,
-        league_params = league_params,
+        league_params = day_league_params,
         season = season
       )
 
@@ -363,6 +453,13 @@ for (season in BACKFILL_SEASONS) {
       message(sprintf("   Written run_id = %d", run_id))
     }
   }
+
+  # Carry this season's final Elo ratings into the next season, regressed
+  # toward the mean (see regress_elo_to_mean()).
+  final_elo_snapshot <- elo_snapshot_at(elo_history, max(played_dates), all_team_ids)
+  carried_elo_ratings <- regress_elo_to_mean(
+    setNames(final_elo_snapshot$elo_rating, final_elo_snapshot$team_id)
+  )
 }
 
 message(sprintf("\n[%s] Backfill complete.", Sys.time()))
