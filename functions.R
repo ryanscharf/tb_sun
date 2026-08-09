@@ -1541,7 +1541,9 @@ run_simulation_pipeline <- function(
     rank_dist = rank_dist,
     cutoff_dist = cutoff_dist,
     played_games = played_games,
-    remaining_games = remaining_games
+    remaining_games = remaining_games,
+    home_advantage_used = home_advantage,
+    rho_used = if (use_dc_sim) rho else NA_real_
   ))
 }
 

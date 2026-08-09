@@ -104,8 +104,16 @@ CREATE TABLE IF NOT EXISTS simulation_runs (
   games_remaining   INTEGER,
   gameweek_id       INTEGER REFERENCES gameweeks(gameweek_id),
   model_version_id  INTEGER REFERENCES model_versions(model_version_id),
-  season            TEXT NOT NULL
+  season            TEXT NOT NULL,
+  -- Nullable: home_advantage is always used (0.3 default or fitted), but
+  -- rho only applies to Dixon-Coles presets (v3.0+) -- NULL means the
+  -- preset didn't use the tau correction, not that fitting failed.
+  home_advantage    NUMERIC(6,4),
+  rho               NUMERIC(6,4)
 );
+
+ALTER TABLE simulation_runs ADD COLUMN IF NOT EXISTS home_advantage NUMERIC(6,4);
+ALTER TABLE simulation_runs ADD COLUMN IF NOT EXISTS rho NUMERIC(6,4);
 
 -- ── playoff_odds ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS playoff_odds (

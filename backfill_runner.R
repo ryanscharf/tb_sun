@@ -24,6 +24,9 @@ get_db_conn <- function() {
   )
 }
 
+# NA -> SQL NULL (rho is NA for non-Dixon-Coles presets, not a fitting failure).
+sql_num <- function(x) if (is.null(x) || is.na(x)) "NULL" else as.character(x)
+
 N_SIMS <- as.integer(Sys.getenv("N_SIMS", "1000000"))
 N_CORES <- as.integer(Sys.getenv("N_CORES", "4"))
 
@@ -346,15 +349,17 @@ for (season in BACKFILL_SEASONS) {
         dbGetQuery(
           con,
           sprintf(
-            "INSERT INTO simulation_runs (run_at, season, n_sims, games_played, games_remaining, gameweek_id, model_version_id)
-         VALUES ('%s'::timestamptz, '%s', %d, %d, %d, %d, %d) RETURNING run_id",
+            "INSERT INTO simulation_runs (run_at, season, n_sims, games_played, games_remaining, gameweek_id, model_version_id, home_advantage, rho)
+         VALUES ('%s'::timestamptz, '%s', %d, %d, %d, %d, %d, %s, %s) RETURNING run_id",
             paste0(cutoff_date, " 23:59:59 America/New_York"),
             season,
             N_SIMS,
             nrow(played_games),
             nrow(remaining_games),
             gameweek_id,
-            model_version_id
+            model_version_id,
+            sql_num(output$home_advantage_used),
+            sql_num(output$rho_used)
           )
         )$run_id
       )
