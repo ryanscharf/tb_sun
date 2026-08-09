@@ -65,7 +65,7 @@ TrueNAS Server (192.168.2.66)
     └─ playoff-runner container  → runs simulation → PostgreSQL
                                         │
                               Cloudflare Tunnel
-                              ***REMOVED***
+                              (private hostname)
                                         │
                                    Shiny App
                            (shinyapps.io / Posit Connect)
