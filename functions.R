@@ -661,7 +661,7 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
     }
   }
 
-  per_season <- purrr::map_dfr(usable_seasons, function(season) {
+  fetch_season_games <- function(season) {
     games <- tryCatch(
       suppressMessages(asa_client$get_games(leagues = "usls", season = season)) %>%
         as_tibble() %>%
@@ -676,22 +676,15 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
         tibble()
       }
     )
-
     if (!is.null(current_season) && !is.null(cutoff_date) && identical(season, current_season)) {
       games <- games %>% filter(date <= cutoff_date)
     }
+    games
+  }
 
-    # The underlying GLM fits ~2*n_teams+2 parameters (attack + defense
-    # effects, intercept, home coefficient) -- for a 9-team league that's
-    # ~18 parameters, so a flat "10 games" floor was letting fits through
-    # with barely more observations than parameters. That produced
-    # nonsensical-but-not-crashing results (observed: home_advantage = -1.2,
-    # rho pinned to the edge of its search interval at -0.4999 -- a
-    # degenerate fit, not a real optimum). Scale the floor with team count
-    # instead, with an absolute minimum so very early cutoffs (few teams
-    # seen yet) don't slip through at an unreasonably low bar either.
+  fit_season <- function(season, games, min_games) {
     n_teams_seen <- length(unique(c(games$home_team_id, games$away_team_id)))
-    if (nrow(games) < max(6 * n_teams_seen, 40)) {
+    if (nrow(games) < min_games(n_teams_seen)) {
       return(NULL)
     }
 
@@ -702,7 +695,46 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
     rho <- estimate_dc_rho(games, strengths, home_advantage = home_adv, xi = xi)
 
     tibble(season = season, n_games = nrow(games), home_advantage = home_adv, rho = rho)
+  }
+
+  # The underlying GLM fits ~2*n_teams+2 parameters (attack + defense
+  # effects, intercept, home coefficient) -- for a 9-team league that's
+  # ~18 parameters, so a flat "10 games" floor was letting fits through
+  # with barely more observations than parameters. That produced
+  # nonsensical-but-not-crashing results (observed: home_advantage = -1.2,
+  # rho pinned to the edge of its search interval at -0.4999 -- a
+  # degenerate fit, not a real optimum). Scale the floor with team count
+  # instead, with an absolute minimum so very early cutoffs (few teams
+  # seen yet) don't slip through at an unreasonably low bar either.
+  strict_gate <- function(n_teams_seen) max(6 * n_teams_seen, 40)
+
+  prior_seasons <- if (!is.null(current_season)) setdiff(usable_seasons, current_season) else usable_seasons
+  per_season_prior <- purrr::map_dfr(prior_seasons, function(season) {
+    fit_season(season, fetch_season_games(season), min_games = strict_gate)
   })
+
+  # Once at least one already-qualified prior season is anchoring the pool,
+  # the current (in-progress) season no longer needs to independently clear
+  # the same 40-54 game bar before contributing -- weighted.mean() below
+  # down-weights it in proportion to its own (small, early-season) game
+  # count, so a thin slice can't dominate the pooled estimate the way an
+  # unpooled single-season fit could. The strict gate only matters when a
+  # season would be the SOLE contributor to the pool (e.g. the very first
+  # season ever backfilled, with no prior history to lean on) -- exactly the
+  # scenario that produced the original degenerate fit above.
+  current_gate <- if (nrow(per_season_prior) > 0) {
+    function(n_teams_seen) max(n_teams_seen, 1)
+  } else {
+    strict_gate
+  }
+
+  per_season_current <- if (!is.null(current_season) && current_season %in% usable_seasons) {
+    fit_season(current_season, fetch_season_games(current_season), min_games = current_gate)
+  } else {
+    NULL
+  }
+
+  per_season <- bind_rows(per_season_prior, per_season_current)
 
   if (is.null(per_season) || nrow(per_season) == 0) {
     message("fit_pooled_league_params: no usable seasons -- falling back to defaults (home_advantage = 0.3, rho = 0).")

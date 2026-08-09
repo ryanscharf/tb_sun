@@ -394,10 +394,13 @@ server <- function(input, output, session) {
 
   observe({
     req(nrow(model_versions) > 0)
-    default_idx <- which(model_versions$is_default)[1]
-    if (is.na(default_idx)) {
-      default_idx <- 1
-    }
+    # Default to the highest model_version_id (get_model_versions() already
+    # filters to is_active and orders ascending, so this is simply the most
+    # advanced active preset -- e.g. v5.0 Combined today) rather than trusting
+    # the DB's is_default flag, which requires manual upkeep every time a new
+    # preset is added and would otherwise silently keep pointing at a stale
+    # older version.
+    default_idx <- nrow(model_versions)
     default_id <- model_versions$model_version_id[default_idx]
     updateSelectInput(
       session,
