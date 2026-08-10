@@ -264,9 +264,6 @@ ui <- page_sidebar(
 
   sidebar = sidebar(
     open = FALSE,
-    selectInput("model_version", "Model Version", choices = NULL),
-    uiOutput("model_version_description"),
-    hr(),
     selectInput("season", "Season", choices = NULL),
     sliderInput(
       "gameweek",
@@ -276,6 +273,9 @@ ui <- page_sidebar(
       value = 1,
       step = 1
     ),
+    selectInput("model_version", "Model Version", choices = NULL),
+    hr(),
+    uiOutput("model_version_description"),
     hr(),
     accordion(
       open = FALSE,
@@ -438,7 +438,13 @@ server <- function(input, output, session) {
     req(input$model_version, input$season)
     max_gw <- get_max_gameweek(as.integer(input$model_version), input$season)
     req(!is.na(max_gw))
-    updateSliderInput(session, "gameweek", min = 1, max = max_gw, value = max_gw)
+    updateSliderInput(
+      session,
+      "gameweek",
+      min = 1,
+      max = max_gw,
+      value = max_gw
+    )
   })
 
   # Plain observe(), not observeEvent() -- reacts to a change in ANY of the
@@ -447,12 +453,20 @@ server <- function(input, output, session) {
   # season/gameweek don't end up changing.
   observe({
     req(input$model_version, input$season, input$gameweek)
-    data(load_db_data(as.integer(input$model_version), input$season, input$gameweek))
+    data(load_db_data(
+      as.integer(input$model_version),
+      input$season,
+      input$gameweek
+    ))
   })
 
   observeEvent(input$refresh, {
     req(input$model_version, input$season, input$gameweek)
-    data(load_db_data(as.integer(input$model_version), input$season, input$gameweek))
+    data(load_db_data(
+      as.integer(input$model_version),
+      input$season,
+      input$gameweek
+    ))
   })
 
   # Elo has no model_version dimension -- loaded independently of the
@@ -498,7 +512,9 @@ server <- function(input, output, session) {
       error = function(e) NULL
     )
 
-    citation_tags <- if (!is.null(citations) && is.data.frame(citations) && nrow(citations) > 0) {
+    citation_tags <- if (
+      !is.null(citations) && is.data.frame(citations) && nrow(citations) > 0
+    ) {
       tagList(
         p(class = "small text-muted mb-1 mt-2", strong("References:")),
         tags$ul(
@@ -506,7 +522,9 @@ server <- function(input, output, session) {
           lapply(seq_len(nrow(citations)), function(i) {
             tags$li(
               tags$a(
-                href = citations$url[i], target = "_blank", rel = "noopener",
+                href = citations$url[i],
+                target = "_blank",
+                rel = "noopener",
                 sprintf("%s (%d)", citations$authors[i], citations$year[i])
               ),
               sprintf(" — %s", citations$title[i])
