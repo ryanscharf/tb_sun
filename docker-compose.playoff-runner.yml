@@ -12,4 +12,5 @@ services:
       - DB_NAME=${DB_NAME}
       - N_SIMS=${N_SIMS:-1000000}
       - N_CORES=${N_CORES:-16}
+      - USL_SEASON=${USL_SEASON:-2025-26}
       - RUN_ON_STARTUP=${PLAYOFF_RUN_ON_STARTUP:-false}

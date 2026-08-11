@@ -23,7 +23,11 @@ if (file.exists(".env")) {
 }
 
 
-get_schedule <- function(league_id = "10699", season = Sys.getenv("USL_SEASON", "2025-26"), con = NULL) {
+get_schedule <- function(
+  league_id = "10699",
+  season = Sys.getenv("USL_SEASON", "2025-26"),
+  con = NULL
+) {
   url <- paste0("https://www.fotmob.com/api/data/leagues?id=", league_id)
 
   fotmob_schedule <- tryCatch(
@@ -280,8 +284,15 @@ fit_team_strengths_dc <- function(completed_games, xi = 0, as_of_date = NULL) {
   # Total match count alone isn't enough per-team coverage for 8-9 teams --
   # require roughly 2 appearances/team on average (nrow is match count, each
   # match is 2 team-appearances, so nrow >= n_teams_seen is ~2 apps/team).
-  n_teams_seen <- length(unique(c(completed_games$home_team_id, completed_games$away_team_id)))
-  if (nrow(completed_games) < 4 || n_teams_seen < 2 || nrow(completed_games) < n_teams_seen) {
+  n_teams_seen <- length(unique(c(
+    completed_games$home_team_id,
+    completed_games$away_team_id
+  )))
+  if (
+    nrow(completed_games) < 4 ||
+      n_teams_seen < 2 ||
+      nrow(completed_games) < n_teams_seen
+  ) {
     return(calculate_team_strengths(completed_games))
   }
 
@@ -379,12 +390,21 @@ fit_team_strengths_dc <- function(completed_games, xi = 0, as_of_date = NULL) {
   MIN_STRENGTH <- 0.05
   MAX_HOME_ADVANTAGE <- 2
 
-  fitted_home_advantage <- min(max(fitted_home_advantage, -MAX_HOME_ADVANTAGE), MAX_HOME_ADVANTAGE)
+  fitted_home_advantage <- min(
+    max(fitted_home_advantage, -MAX_HOME_ADVANTAGE),
+    MAX_HOME_ADVANTAGE
+  )
 
   result <- tibble(
     team = team_levels,
-    attack_strength = pmin(pmax(exp(intercept + attack_eff), MIN_STRENGTH), MAX_STRENGTH),
-    defense_strength = pmin(pmax(exp(intercept + defense_eff), MIN_STRENGTH), MAX_STRENGTH)
+    attack_strength = pmin(
+      pmax(exp(intercept + attack_eff), MIN_STRENGTH),
+      MAX_STRENGTH
+    ),
+    defense_strength = pmin(
+      pmax(exp(intercept + defense_eff), MIN_STRENGTH),
+      MAX_STRENGTH
+    )
   ) %>%
     left_join(games_played, by = "team") %>%
     mutate(games = coalesce(games, 0L))
@@ -401,7 +421,9 @@ fit_team_strengths_dc <- function(completed_games, xi = 0, as_of_date = NULL) {
 # No-ops if `team_strengths` has no `games` column (the zero-games-played
 # fallback tibble in calculate_playoff_odds_fast()) or k isn't set.
 apply_shrinkage <- function(team_strengths, k) {
-  if (is.null(k) || is.na(k) || k <= 0 || !("games" %in% names(team_strengths))) {
+  if (
+    is.null(k) || is.na(k) || k <= 0 || !("games" %in% names(team_strengths))
+  ) {
     return(team_strengths)
   }
 
@@ -411,8 +433,12 @@ apply_shrinkage <- function(team_strengths, k) {
   team_strengths %>%
     mutate(
       shrink_w = games / (games + k),
-      attack_strength = shrink_w * attack_strength + (1 - shrink_w) * league_attack,
-      defense_strength = shrink_w * defense_strength + (1 - shrink_w) * league_defense
+      attack_strength = shrink_w *
+        attack_strength +
+        (1 - shrink_w) * league_attack,
+      defense_strength = shrink_w *
+        defense_strength +
+        (1 - shrink_w) * league_defense
     ) %>%
     select(-shrink_w)
 }
@@ -425,7 +451,11 @@ apply_shrinkage <- function(team_strengths, k) {
 # blending) if the API call fails, returns nothing, or the schema doesn't
 # match what's expected -- coverage for USL SL specifically isn't guaranteed
 # the way it is for MLS/NWSL.
-blend_actual_and_xg <- function(played_games, xg_weight, season = Sys.getenv("USL_SEASON", "2025-26")) {
+blend_actual_and_xg <- function(
+  played_games,
+  xg_weight,
+  season = Sys.getenv("USL_SEASON", "2025-26")
+) {
   if (is.null(xg_weight) || is.na(xg_weight) || xg_weight <= 0) {
     return(played_games)
   }
@@ -437,10 +467,18 @@ blend_actual_and_xg <- function(played_games, xg_weight, season = Sys.getenv("US
       ) %>%
         as_tibble()
 
-      if (nrow(xg) == 0) stop("empty xG response")
+      if (nrow(xg) == 0) {
+        stop("empty xG response")
+      }
 
-      home_xg_col <- intersect(c("home_team_xgoals", "home_xgoals", "home_xg"), names(xg))[1]
-      away_xg_col <- intersect(c("away_team_xgoals", "away_xgoals", "away_xg"), names(xg))[1]
+      home_xg_col <- intersect(
+        c("home_team_xgoals", "home_xgoals", "home_xg"),
+        names(xg)
+      )[1]
+      away_xg_col <- intersect(
+        c("away_team_xgoals", "away_xgoals", "away_xg"),
+        names(xg)
+      )[1]
       date_col <- intersect(c("date_time_utc", "date"), names(xg))[1]
 
       if (is.na(home_xg_col) || is.na(away_xg_col) || is.na(date_col)) {
@@ -461,11 +499,13 @@ blend_actual_and_xg <- function(played_games, xg_weight, season = Sys.getenv("US
         mutate(
           matched = !is.na(home_xg_actual) & !is.na(away_xg_actual),
           home_goals = if_else(
-            is.na(home_xg_actual), home_goals,
+            is.na(home_xg_actual),
+            home_goals,
             (1 - xg_weight) * home_goals + xg_weight * home_xg_actual
           ),
           away_goals = if_else(
-            is.na(away_xg_actual), away_goals,
+            is.na(away_xg_actual),
+            away_goals,
             (1 - xg_weight) * away_goals + xg_weight * away_xg_actual
           )
         )
@@ -476,14 +516,21 @@ blend_actual_and_xg <- function(played_games, xg_weight, season = Sys.getenv("US
       # succeed without error while blending nothing -- make that visible.
       message(sprintf(
         "xG blend: matched %d/%d played games (weight = %.2f).",
-        n_matched, nrow(played_games), xg_weight
+        n_matched,
+        nrow(played_games),
+        xg_weight
       ))
-      if (n_matched == 0) stop("xG data returned but 0 rows matched played_games on team/date")
+      if (n_matched == 0) {
+        stop("xG data returned but 0 rows matched played_games on team/date")
+      }
 
       blended %>% select(-home_xg_actual, -away_xg_actual, -matched)
     },
     error = function(e) {
-      message(sprintf("xG blend unavailable (%s) -- using goals only.", conditionMessage(e)))
+      message(sprintf(
+        "xG blend unavailable (%s) -- using goals only.",
+        conditionMessage(e)
+      ))
       played_games
     }
   )
@@ -496,11 +543,14 @@ blend_actual_and_xg <- function(played_games, xg_weight, season = Sys.getenv("US
 # rho, typically negative when fit.
 dc_tau <- function(x, y, lambda, mu, rho) {
   ifelse(
-    x == 0 & y == 0, 1 - lambda * mu * rho,
+    x == 0 & y == 0,
+    1 - lambda * mu * rho,
     ifelse(
-      x == 0 & y == 1, 1 + lambda * rho,
+      x == 0 & y == 1,
+      1 + lambda * rho,
       ifelse(
-        x == 1 & y == 0, 1 + mu * rho,
+        x == 1 & y == 0,
+        1 + mu * rho,
         ifelse(x == 1 & y == 1, 1 - rho, 1)
       )
     )
@@ -514,26 +564,55 @@ dc_tau <- function(x, y, lambda, mu, rho) {
 # fit the correlation term conditional on them (only the tau factor depends
 # on rho, so this reduces to maximizing sum(w * log(tau)) over historical
 # scorelines).
-estimate_dc_rho <- function(completed_games, team_strengths, home_advantage = 0.3, xi = 0, as_of_date = NULL) {
+estimate_dc_rho <- function(
+  completed_games,
+  team_strengths,
+  home_advantage = 0.3,
+  xi = 0,
+  as_of_date = NULL
+) {
   if (nrow(completed_games) < 10) {
     return(0)
   }
 
-  as_of_date <- if (is.null(as_of_date)) max(completed_games$date) else as_of_date
+  as_of_date <- if (is.null(as_of_date)) {
+    max(completed_games$date)
+  } else {
+    as_of_date
+  }
 
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
-  home_attack <- team_strengths$attack_strength[match(completed_games$home_team_id, team_strengths$team)]
-  home_defense <- team_strengths$defense_strength[match(completed_games$home_team_id, team_strengths$team)]
-  away_attack <- team_strengths$attack_strength[match(completed_games$away_team_id, team_strengths$team)]
-  away_defense <- team_strengths$defense_strength[match(completed_games$away_team_id, team_strengths$team)]
+  home_attack <- team_strengths$attack_strength[match(
+    completed_games$home_team_id,
+    team_strengths$team
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    completed_games$home_team_id,
+    team_strengths$team
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    completed_games$away_team_id,
+    team_strengths$team
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    completed_games$away_team_id,
+    team_strengths$team
+  )]
 
   # Same overflow safety cap as simulate_matches_dc() -- not a modeling choice.
-  lambda <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  lambda <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   mu <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
-  w <- if (xi > 0) exp(-xi * as.numeric(as_of_date - completed_games$date)) else rep(1, nrow(completed_games))
+  w <- if (xi > 0) {
+    exp(-xi * as.numeric(as_of_date - completed_games$date))
+  } else {
+    rep(1, nrow(completed_games))
+  }
 
   x <- completed_games$home_goals
   y <- completed_games$away_goals
@@ -571,17 +650,36 @@ estimate_dc_rho <- function(completed_games, team_strengths, home_advantage = 0.
 # This tells you whether that's genuine signal in the data or worth
 # distrusting as a small-sample artifact -- run manually, e.g.:
 #   diagnose_dc_tau(played_games, team_strengths_complete, home_advantage)
-diagnose_dc_tau <- function(completed_games, team_strengths, home_advantage = 0.3) {
+diagnose_dc_tau <- function(
+  completed_games,
+  team_strengths,
+  home_advantage = 0.3
+) {
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
-  home_attack <- team_strengths$attack_strength[match(completed_games$home_team_id, team_strengths$team)]
-  home_defense <- team_strengths$defense_strength[match(completed_games$home_team_id, team_strengths$team)]
-  away_attack <- team_strengths$attack_strength[match(completed_games$away_team_id, team_strengths$team)]
-  away_defense <- team_strengths$defense_strength[match(completed_games$away_team_id, team_strengths$team)]
+  home_attack <- team_strengths$attack_strength[match(
+    completed_games$home_team_id,
+    team_strengths$team
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    completed_games$home_team_id,
+    team_strengths$team
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    completed_games$away_team_id,
+    team_strengths$team
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    completed_games$away_team_id,
+    team_strengths$team
+  )]
 
   # Same overflow safety cap as simulate_matches_dc() -- not a modeling choice.
-  lambda <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  lambda <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   mu <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   ok <- !is.na(lambda) & !is.na(mu)
@@ -652,7 +750,12 @@ diagnose_dc_tau <- function(completed_games, team_strengths, home_advantage = 0.
 # vector is dropped entirely for the same reason. Pass current_season = NULL
 # (or omit cutoff_date) to pool everything unrestricted -- only appropriate
 # for ad hoc/exploratory use where point-in-time realism doesn't matter.
-fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cutoff_date = NULL) {
+fit_pooled_league_params <- function(
+  seasons,
+  xi = 0,
+  current_season = NULL,
+  cutoff_date = NULL
+) {
   usable_seasons <- seasons
   if (!is.null(current_season)) {
     season_idx <- match(current_season, seasons)
@@ -663,20 +766,45 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
 
   fetch_season_games <- function(season) {
     games <- tryCatch(
-      suppressMessages(asa_client$get_games(leagues = "usls", season = season)) %>%
+      suppressMessages(asa_client$get_games(
+        leagues = "usls",
+        season = season
+      )) %>%
         as_tibble() %>%
         filter(status == "FullTime") %>%
         transmute(
-          home_team_id, away_team_id,
-          home_goals = home_score, away_goals = away_score,
+          home_team_id,
+          away_team_id,
+          home_goals = home_score,
+          away_goals = away_score,
           date = as.Date(date_time_utc)
         ),
       error = function(e) {
-        message(sprintf("fit_pooled_league_params: couldn't fetch season %s (%s) -- skipping.", season, conditionMessage(e)))
-        tibble()
+        message(sprintf(
+          "fit_pooled_league_params: couldn't fetch season %s (%s) -- skipping.",
+          season,
+          conditionMessage(e)
+        ))
+        # Properly shaped (0-row, not 0-column) so downstream nrow()/$date/
+        # filter(date <= ...) degrade to "no games" gracefully instead of
+        # crashing -- a bare tibble() has no columns at all, so filter()'s
+        # tidy-eval can't find `date` in the data and falls back to the
+        # calling environment, where it finds base R's date() function and
+        # errors trying to compare it with `<=`.
+        tibble(
+          home_team_id = character(),
+          away_team_id = character(),
+          home_goals = numeric(),
+          away_goals = numeric(),
+          date = as.Date(character())
+        )
       }
     )
-    if (!is.null(current_season) && !is.null(cutoff_date) && identical(season, current_season)) {
+    if (
+      !is.null(current_season) &&
+        !is.null(cutoff_date) &&
+        identical(season, current_season)
+    ) {
       games <- games %>% filter(date <= cutoff_date)
     }
     games
@@ -690,11 +818,18 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
 
     strengths <- fit_team_strengths_dc(games, xi = xi)
     home_adv <- attr(strengths, "home_advantage")
-    if (is.null(home_adv) || !is.finite(home_adv)) home_adv <- 0.3
+    if (is.null(home_adv) || !is.finite(home_adv)) {
+      home_adv <- 0.3
+    }
 
     rho <- estimate_dc_rho(games, strengths, home_advantage = home_adv, xi = xi)
 
-    tibble(season = season, n_games = nrow(games), home_advantage = home_adv, rho = rho)
+    tibble(
+      season = season,
+      n_games = nrow(games),
+      home_advantage = home_adv,
+      rho = rho
+    )
   }
 
   # The underlying GLM fits ~2*n_teams+2 parameters (attack + defense
@@ -708,7 +843,11 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
   # seen yet) don't slip through at an unreasonably low bar either.
   strict_gate <- function(n_teams_seen) max(6 * n_teams_seen, 40)
 
-  prior_seasons <- if (!is.null(current_season)) setdiff(usable_seasons, current_season) else usable_seasons
+  prior_seasons <- if (!is.null(current_season)) {
+    setdiff(usable_seasons, current_season)
+  } else {
+    usable_seasons
+  }
   per_season_prior <- purrr::map_dfr(prior_seasons, function(season) {
     fit_season(season, fetch_season_games(season), min_games = strict_gate)
   })
@@ -728,8 +867,14 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
     strict_gate
   }
 
-  per_season_current <- if (!is.null(current_season) && current_season %in% usable_seasons) {
-    fit_season(current_season, fetch_season_games(current_season), min_games = current_gate)
+  per_season_current <- if (
+    !is.null(current_season) && current_season %in% usable_seasons
+  ) {
+    fit_season(
+      current_season,
+      fetch_season_games(current_season),
+      min_games = current_gate
+    )
   } else {
     NULL
   }
@@ -737,19 +882,25 @@ fit_pooled_league_params <- function(seasons, xi = 0, current_season = NULL, cut
   per_season <- bind_rows(per_season_prior, per_season_current)
 
   if (is.null(per_season) || nrow(per_season) == 0) {
-    message("fit_pooled_league_params: no usable seasons -- falling back to defaults (home_advantage = 0.3, rho = 0).")
+    message(
+      "fit_pooled_league_params: no usable seasons -- falling back to defaults (home_advantage = 0.3, rho = 0)."
+    )
     return(list(home_advantage = 0.3, rho = 0, per_season = tibble()))
   }
 
   message(sprintf(
     "fit_pooled_league_params: pooled %d season(s), %d total games -- home_advantage = %.3f, rho = %.4f",
-    nrow(per_season), sum(per_season$n_games),
+    nrow(per_season),
+    sum(per_season$n_games),
     weighted.mean(per_season$home_advantage, per_season$n_games),
     weighted.mean(per_season$rho, per_season$n_games)
   ))
 
   list(
-    home_advantage = weighted.mean(per_season$home_advantage, per_season$n_games),
+    home_advantage = weighted.mean(
+      per_season$home_advantage,
+      per_season$n_games
+    ),
     rho = weighted.mean(per_season$rho, per_season$n_games),
     per_season = per_season
   )
@@ -765,12 +916,26 @@ sample_dc_goals <- function(home_xg, away_xg, rho, n_sims, max_goals = 10) {
   h_range <- 0:max_goals
   a_range <- 0:max_goals
 
-  p <- outer(h_range, a_range, function(h, a) dpois(h, home_xg) * dpois(a, away_xg))
-  tau_adj <- outer(h_range, a_range, dc_tau, lambda = home_xg, mu = away_xg, rho = rho)
+  p <- outer(h_range, a_range, function(h, a) {
+    dpois(h, home_xg) * dpois(a, away_xg)
+  })
+  tau_adj <- outer(
+    h_range,
+    a_range,
+    dc_tau,
+    lambda = home_xg,
+    mu = away_xg,
+    rho = rho
+  )
   p <- pmax(p * tau_adj, 0)
   p <- p / sum(p)
 
-  idx <- sample.int(length(p), size = n_sims, replace = TRUE, prob = as.vector(p))
+  idx <- sample.int(
+    length(p),
+    size = n_sims,
+    replace = TRUE,
+    prob = as.vector(p)
+  )
   list(
     h = h_range[((idx - 1) %% (max_goals + 1)) + 1],
     a = a_range[((idx - 1) %/% (max_goals + 1)) + 1]
@@ -781,22 +946,44 @@ sample_dc_goals <- function(home_xg, away_xg, rho, n_sims, max_goals = 10) {
 # input/output shape (drop-in for get_match_probabilities() /
 # get_scoreline_distributions()), but draws goals from the tau-adjusted
 # joint distribution per match instead of independent Poisson.
-simulate_matches_dc <- function(remaining_games, team_strengths, n_sims, home_advantage = 0.3, rho = 0, max_goals = 10) {
+simulate_matches_dc <- function(
+  remaining_games,
+  team_strengths,
+  n_sims,
+  home_advantage = 0.3,
+  rho = 0,
+  max_goals = 10
+) {
   n_games <- nrow(remaining_games)
 
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, team_strengths$team)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, team_strengths$team)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
 
   # Upper cap is a safety net, not a modeling choice -- pathological inputs
   # (e.g. an extreme fitted strength value) could otherwise produce an xG
   # that overflows the match_probabilities table's NUMERIC(5,3) column;
   # nothing a real match produces should ever approach this.
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   h_goals <- matrix(0L, n_sims, n_games)
@@ -857,13 +1044,28 @@ simulate_season_dc <- function(
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
   str_teams <- team_strengths$team
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, str_teams)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, str_teams)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, str_teams)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, str_teams)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
 
   # See simulate_matches_dc() -- same overflow safety cap, not a modeling choice.
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   h_goals <- matrix(0L, n_sims, n_games)
@@ -879,11 +1081,14 @@ simulate_season_dc <- function(
     p <- outer(h_range, a_range, function(h, a) dpois(h, lambda) * dpois(a, mu))
     tau_adj <- outer(h_range, a_range, function(x, y) {
       ifelse(
-        x == 0 & y == 0, 1 - lambda * mu * rho,
+        x == 0 & y == 0,
+        1 - lambda * mu * rho,
         ifelse(
-          x == 0 & y == 1, 1 + lambda * rho,
+          x == 0 & y == 1,
+          1 + lambda * rho,
           ifelse(
-            x == 1 & y == 0, 1 + mu * rho,
+            x == 1 & y == 0,
+            1 + mu * rho,
             ifelse(x == 1 & y == 1, 1 - rho, 1)
           )
         )
@@ -892,7 +1097,12 @@ simulate_season_dc <- function(
     p <- pmax(p * tau_adj, 0)
     p <- p / sum(p)
 
-    idx <- sample.int(length(p), size = n_sims, replace = TRUE, prob = as.vector(p))
+    idx <- sample.int(
+      length(p),
+      size = n_sims,
+      replace = TRUE,
+      prob = as.vector(p)
+    )
     h_goals[, g] <- h_range[((idx - 1) %% (max_goals + 1)) + 1]
     a_goals[, g] <- a_range[((idx - 1) %/% (max_goals + 1)) + 1]
   }
@@ -901,7 +1111,12 @@ simulate_season_dc <- function(
   a_pts <- ifelse(a_goals > h_goals, 3, ifelse(h_goals == a_goals, 1, 0))
   h_gd <- h_goals - a_goals
 
-  final_pts <- matrix(current_standings$current_points, n_sims, n_teams, byrow = TRUE)
+  final_pts <- matrix(
+    current_standings$current_points,
+    n_sims,
+    n_teams,
+    byrow = TRUE
+  )
   final_gd <- matrix(0, n_sims, n_teams)
   final_gs <- matrix(0, n_sims, n_teams)
 
@@ -922,7 +1137,9 @@ simulate_season_dc <- function(
     final_gs +
     matrix(runif(n_sims * n_teams), n_sims, n_teams)
 
-  rank_matrix <- t(apply(tb_score, 1, function(x) rank(-x, ties.method = "random")))
+  rank_matrix <- t(apply(tb_score, 1, function(x) {
+    rank(-x, ties.method = "random")
+  }))
 
   data.table(
     sim_id = rep(1:n_sims, times = n_teams),
@@ -962,10 +1179,13 @@ simulate_matches_vectorized <- function(
   )]
 
   # See simulate_matches_dc() -- same overflow safety cap, not a modeling choice.
-  home_xg <- pmin(pmax(
-    0.01,
-    (home_attack * away_defense / league_avg) + home_advantage
-  ), 15)
+  home_xg <- pmin(
+    pmax(
+      0.01,
+      (home_attack * away_defense / league_avg) + home_advantage
+    ),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   h_goals <- matrix(
@@ -1094,10 +1314,13 @@ simulate_season_vectorized <- function(
   )]
 
   # See simulate_matches_dc() -- same overflow safety cap, not a modeling choice.
-  home_xg <- pmin(pmax(
-    0.01,
-    (home_attack * away_defense / league_avg) + home_advantage
-  ), 15)
+  home_xg <- pmin(
+    pmax(
+      0.01,
+      (home_attack * away_defense / league_avg) + home_advantage
+    ),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   h_goals <- matrix(
@@ -1171,14 +1394,36 @@ calculate_playoff_odds_fast <- function(
   season = Sys.getenv("USL_SEASON", "2025-26"),
   use_gpu = FALSE
 ) {
-  message(sprintf("Fetching official scores from ASA API for season %s...", season))
-  asa_games <- suppressMessages(asa_client$get_games(
-    leagues = 'usls',
-    season = season
-  )) %>%
-    lazy_dt() %>%
-    mutate(date_only = as.Date(date_time_utc)) %>%
-    as_tibble()
+  message(sprintf(
+    "Fetching official scores from ASA API for season %s...",
+    season
+  ))
+  asa_games <- tryCatch(
+    suppressMessages(asa_client$get_games(
+      leagues = 'usls',
+      season = season
+    )) %>%
+      lazy_dt() %>%
+      mutate(date_only = as.Date(date_time_utc)) %>%
+      as_tibble(),
+    error = function(e) {
+      # ASA has no data for this season yet (e.g. before the season's first
+      # game has been played/scheduled in their system) -- treat as "0 games
+      # played so far" rather than crashing the whole run. The rest of the
+      # pipeline already handles that gracefully: team_strengths_complete
+      # defaults every team to league-average via its left_join, and every
+      # scheduled game just falls out as "remaining".
+      message(sprintf(
+        "  Couldn't fetch ASA data for season %s (%s) -- treating as 0 games played so far.",
+        season, conditionMessage(e)
+      ))
+      tibble(
+        home_team_id = character(), away_team_id = character(),
+        home_score = numeric(), away_score = numeric(),
+        status = character(), date_only = as.Date(character())
+      )
+    }
+  )
 
   schedule_mapped <- schedule_obj %>%
     left_join(team_name_mapping, by = c("home_team" = "fotmob_name")) %>%
@@ -1214,8 +1459,16 @@ calculate_playoff_odds_fast <- function(
   ))
 
   run_simulation_pipeline(
-    played_games, remaining_games, all_team_ids,
-    n_sims, n_cores, qualify_top_n, feature_flags, league_params, season, use_gpu
+    played_games,
+    remaining_games,
+    all_team_ids,
+    n_sims,
+    n_cores,
+    qualify_top_n,
+    feature_flags,
+    league_params,
+    season,
+    use_gpu
   )
 }
 
@@ -1255,12 +1508,22 @@ calculate_playoff_odds_at_cutoff <- function(
 
   message(sprintf(
     "Cutoff %s: %d games played, %d remaining.",
-    cutoff_date, nrow(played_games), nrow(remaining_games)
+    cutoff_date,
+    nrow(played_games),
+    nrow(remaining_games)
   ))
 
   run_simulation_pipeline(
-    played_games, remaining_games, all_team_ids,
-    n_sims, n_cores, qualify_top_n, feature_flags, league_params, season, use_gpu
+    played_games,
+    remaining_games,
+    all_team_ids,
+    n_sims,
+    n_cores,
+    qualify_top_n,
+    feature_flags,
+    league_params,
+    season,
+    use_gpu
   )
 }
 
@@ -1286,13 +1549,20 @@ run_simulation_pipeline <- function(
     # xG blending only feeds the strength fit -- standings below always use
     # the real played_games so points/current_points reflect actual results.
     played_games_for_strength <- if (!is.null(feature_flags$xg_blend_weight)) {
-      blend_actual_and_xg(played_games, feature_flags$xg_blend_weight, season = season)
+      blend_actual_and_xg(
+        played_games,
+        feature_flags$xg_blend_weight,
+        season = season
+      )
     } else {
       played_games
     }
 
     team_strengths <- if (!is.null(feature_flags$time_decay_xi)) {
-      fit_team_strengths_dc(played_games_for_strength, xi = feature_flags$time_decay_xi)
+      fit_team_strengths_dc(
+        played_games_for_strength,
+        xi = feature_flags$time_decay_xi
+      )
     } else {
       calculate_team_strengths(played_games_for_strength)
     }
@@ -1302,7 +1572,10 @@ run_simulation_pipeline <- function(
     fitted_home_advantage <- attr(team_strengths, "home_advantage")
 
     if (!is.null(feature_flags$shrinkage_k)) {
-      team_strengths <- apply_shrinkage(team_strengths, feature_flags$shrinkage_k)
+      team_strengths <- apply_shrinkage(
+        team_strengths,
+        feature_flags$shrinkage_k
+      )
     }
 
     home_standings <- played_games %>%
@@ -1387,9 +1660,14 @@ run_simulation_pipeline <- function(
   # when no pooled estimate is available, e.g. ad hoc calls or backfill_runner.R.
   home_advantage <- 0.3
   if (isTRUE(feature_flags$fitted_home_advantage)) {
-    if (!is.null(league_params$home_advantage) && is.finite(league_params$home_advantage)) {
+    if (
+      !is.null(league_params$home_advantage) &&
+        is.finite(league_params$home_advantage)
+    ) {
       home_advantage <- league_params$home_advantage
-    } else if (!is.null(fitted_home_advantage) && is.finite(fitted_home_advantage)) {
+    } else if (
+      !is.null(fitted_home_advantage) && is.finite(fitted_home_advantage)
+    ) {
       home_advantage <- fitted_home_advantage
     }
   }
@@ -1405,9 +1683,16 @@ run_simulation_pipeline <- function(
         played_games,
         team_strengths_complete,
         home_advantage = home_advantage,
-        xi = if (!is.null(feature_flags$time_decay_xi)) feature_flags$time_decay_xi else 0
+        xi = if (!is.null(feature_flags$time_decay_xi)) {
+          feature_flags$time_decay_xi
+        } else {
+          0
+        }
       )
-      message(sprintf("Dixon-Coles rho (single-season fit, no pooled estimate supplied): %.4f", rho))
+      message(sprintf(
+        "Dixon-Coles rho (single-season fit, no pooled estimate supplied): %.4f",
+        rho
+      ))
     }
   }
 
@@ -1422,13 +1707,22 @@ run_simulation_pipeline <- function(
   if (use_gpu) {
     playoff_results <- if (use_dc_sim) {
       simulate_season_gpu_dc(
-        current_standings, remaining_games, team_strengths_complete, n_sims,
-        home_advantage = home_advantage, rho = rho, qualify_top_n = qualify_top_n
+        current_standings,
+        remaining_games,
+        team_strengths_complete,
+        n_sims,
+        home_advantage = home_advantage,
+        rho = rho,
+        qualify_top_n = qualify_top_n
       )
     } else {
       simulate_season_gpu(
-        current_standings, remaining_games, team_strengths_complete, n_sims,
-        home_advantage = home_advantage, qualify_top_n = qualify_top_n
+        current_standings,
+        remaining_games,
+        team_strengths_complete,
+        n_sims,
+        home_advantage = home_advantage,
+        qualify_top_n = qualify_top_n
       )
     }
   } else {
@@ -1531,12 +1825,17 @@ run_simulation_pipeline <- function(
   message("Running match-level simulation...")
   match_results <- if (use_gpu && use_dc_sim) {
     simulate_matches_gpu_dc(
-      remaining_games, team_strengths_complete, n_sims,
-      home_advantage = home_advantage, rho = rho
+      remaining_games,
+      team_strengths_complete,
+      n_sims,
+      home_advantage = home_advantage,
+      rho = rho
     )
   } else if (use_gpu) {
     simulate_matches_gpu(
-      remaining_games, team_strengths_complete, n_sims,
+      remaining_games,
+      team_strengths_complete,
+      n_sims,
       home_advantage = home_advantage
     )
   } else if (use_dc_sim) {
@@ -1556,7 +1855,11 @@ run_simulation_pipeline <- function(
     )
   }
 
-  match_meta <- compute_match_meta(remaining_games, team_strengths_complete, home_advantage)
+  match_meta <- compute_match_meta(
+    remaining_games,
+    team_strengths_complete,
+    home_advantage
+  )
   match_probs <- get_match_probabilities(match_results, match_meta, teams)
   scoreline_dist <- get_scoreline_distributions(
     match_results,
@@ -1586,18 +1889,37 @@ run_simulation_pipeline <- function(
 # rebuilds that same small (n_games-row) lookup for callers to join back
 # onto an aggregated result, instead of grouping the full n_sims x n_games
 # table by columns that never vary within a match_id group.
-compute_match_meta <- function(remaining_games, team_strengths, home_advantage = 0.3) {
+compute_match_meta <- function(
+  remaining_games,
+  team_strengths,
+  home_advantage = 0.3
+) {
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
   str_teams <- team_strengths$team
 
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, str_teams)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, str_teams)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, str_teams)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, str_teams)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
 
   # See simulate_matches_dc() -- same overflow safety cap, not a modeling choice.
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   tibble(
@@ -1841,13 +2163,26 @@ compute_elo_ratings <- function(
     r_home <- ratings[[home_id]]
     r_away <- ratings[[away_id]]
 
-    expected_home <- 1 / (1 + 10^(-(r_home + home_advantage_elo - r_away) / 400))
+    expected_home <- 1 /
+      (1 + 10^(-(r_home + home_advantage_elo - r_away) / 400))
     gd <- g$home_goals - g$away_goals
-    actual_home <- if (gd > 0) 1 else if (gd == 0) 0.5 else 0
+    actual_home <- if (gd > 0) {
+      1
+    } else if (gd == 0) {
+      0.5
+    } else {
+      0
+    }
 
     mov_mult <- if (use_margin_of_victory) {
       agd <- abs(gd)
-      if (agd <= 1) 1 else if (agd == 2) 1.5 else (11 + agd) / 8
+      if (agd <= 1) {
+        1
+      } else if (agd == 2) {
+        1.5
+      } else {
+        (11 + agd) / 8
+      }
     } else {
       1
     }
@@ -1881,7 +2216,12 @@ compute_elo_ratings <- function(
 # initial_rating with 0 games if they haven't played yet) from
 # compute_elo_ratings()'s long-format history -- one row per team, used to
 # write a single gameweek snapshot into elo_ratings.
-elo_snapshot_at <- function(history, cutoff_date, all_team_ids, initial_rating = 1500) {
+elo_snapshot_at <- function(
+  history,
+  cutoff_date,
+  all_team_ids,
+  initial_rating = 1500
+) {
   latest <- history %>%
     filter(date <= cutoff_date) %>%
     group_by(team_id) %>%
@@ -1906,7 +2246,11 @@ elo_snapshot_at <- function(history, cutoff_date, all_team_ids, initial_rating =
 # modest regression is enough. `final_ratings` is a named vector (team_id ->
 # rating); teams not present keep no entry and simply start fresh at
 # initial_rating via compute_elo_ratings()'s own default.
-regress_elo_to_mean <- function(final_ratings, initial_rating = 1500, regression = 1 / 3) {
+regress_elo_to_mean <- function(
+  final_ratings,
+  initial_rating = 1500,
+  regression = 1 / 3
+) {
   final_ratings * (1 - regression) + initial_rating * regression
 }
 
@@ -1924,8 +2268,12 @@ write_elo_snapshot <- function(con, season, gameweek_id, snapshot) {
     mutate(season = season, gameweek_id = gameweek_id)
 
   dbWriteTable(
-    con, "elo_staging", staging,
-    temporary = TRUE, overwrite = TRUE, row.names = FALSE
+    con,
+    "elo_staging",
+    staging,
+    temporary = TRUE,
+    overwrite = TRUE,
+    row.names = FALSE
   )
 
   dbExecute(
@@ -2084,7 +2432,9 @@ plot_elo_trends <- function(elo_history) {
     arrange(gameweek_number)
 
   elo_history %>%
-    mutate(team_abbreviation = factor(team_abbreviation, levels = team_levels)) %>%
+    mutate(
+      team_abbreviation = factor(team_abbreviation, levels = team_levels)
+    ) %>%
     ggplot(aes(
       x = gameweek_date,
       y = elo_rating,
@@ -2093,8 +2443,16 @@ plot_elo_trends <- function(elo_history) {
     )) +
     geom_line(linewidth = 1) +
     geom_point(size = 1.5) +
-    geom_hline(yintercept = 1500, linetype = "dashed", color = "gray50", alpha = 0.7) +
-    scale_x_date(breaks = gw_breaks$gameweek_date, labels = gw_breaks$gameweek_number) +
+    geom_hline(
+      yintercept = 1500,
+      linetype = "dashed",
+      color = "gray50",
+      alpha = 0.7
+    ) +
+    scale_x_date(
+      breaks = gw_breaks$gameweek_date,
+      labels = gw_breaks$gameweek_number
+    ) +
     scale_color_manual(values = color_map) +
     labs(
       title = "Elo Rating Over Time",
@@ -2535,10 +2893,22 @@ simulate_season_gpu_dc <- function(
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
   str_teams <- team_strengths$team
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, str_teams)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, str_teams)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, str_teams)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, str_teams)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    str_teams
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    str_teams
+  )]
 
   unmatched <- unique(c(
     remaining_games$home_team_id[is.na(home_attack)],
@@ -2547,7 +2917,8 @@ simulate_season_gpu_dc <- function(
   if (length(unmatched) > 0) {
     message(sprintf(
       "    %d team(s) with no match history — assuming 0 strength: %s",
-      length(unmatched), paste(unmatched, collapse = ", ")
+      length(unmatched),
+      paste(unmatched, collapse = ", ")
     ))
     home_attack[is.na(home_attack)] <- 0
     home_defense[is.na(home_defense)] <- 0
@@ -2556,7 +2927,10 @@ simulate_season_gpu_dc <- function(
   }
 
   # Same overflow safety cap as the CPU path -- see simulate_matches_dc().
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   # ── One-hot assignment matrices — identical to simulate_season_gpu() ─────────
@@ -2568,8 +2942,16 @@ simulate_season_gpu_dc <- function(
   home_onehot_r[cbind(seq_len(n_games), home_cols)] <- 1
   away_onehot_r[cbind(seq_len(n_games), away_cols)] <- 1
 
-  home_onehot <- torch::torch_tensor(home_onehot_r, dtype = torch::torch_float32(), device = "cuda")
-  away_onehot <- torch::torch_tensor(away_onehot_r, dtype = torch::torch_float32(), device = "cuda")
+  home_onehot <- torch::torch_tensor(
+    home_onehot_r,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
+  away_onehot <- torch::torch_tensor(
+    away_onehot_r,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
 
   # ── Tau-corrected categorical draws, one game at a time ───────────────────────
   # Each game's pmf grid (121 cells for max_goals=10) is built on CPU exactly
@@ -2591,19 +2973,42 @@ simulate_season_gpu_dc <- function(
     mu <- away_xg[g]
 
     p <- outer(h_range, a_range, function(h, a) dpois(h, lambda) * dpois(a, mu))
-    tau_adj <- outer(h_range, a_range, dc_tau, lambda = lambda, mu = mu, rho = rho)
+    tau_adj <- outer(
+      h_range,
+      a_range,
+      dc_tau,
+      lambda = lambda,
+      mu = mu,
+      rho = rho
+    )
     p <- pmax(p * tau_adj, 0)
     p <- p / sum(p)
 
-    probs_t <- torch::torch_tensor(as.vector(p), dtype = torch::torch_float32(), device = "cuda")
-    idx <- as.array(torch::torch_multinomial(probs_t, num_samples = n_sims, replacement = TRUE)$cpu())
+    probs_t <- torch::torch_tensor(
+      as.vector(p),
+      dtype = torch::torch_float32(),
+      device = "cuda"
+    )
+    idx <- as.array(torch::torch_multinomial(
+      probs_t,
+      num_samples = n_sims,
+      replacement = TRUE
+    )$cpu())
 
     h_goals_r[, g] <- h_range[((idx - 1) %% (max_goals + 1)) + 1]
     a_goals_r[, g] <- a_range[((idx - 1) %/% (max_goals + 1)) + 1]
   }
 
-  h_goals_t <- torch::torch_tensor(h_goals_r, dtype = torch::torch_float32(), device = "cuda")
-  a_goals_t <- torch::torch_tensor(a_goals_r, dtype = torch::torch_float32(), device = "cuda")
+  h_goals_t <- torch::torch_tensor(
+    h_goals_r,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
+  a_goals_t <- torch::torch_tensor(
+    a_goals_r,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
   rm(h_goals_r, a_goals_r)
 
   # ── Everything below is copied verbatim from simulate_season_gpu() —
@@ -2680,7 +3085,12 @@ simulate_season_gpu_dc <- function(
 # has always been CPU-only in this pipeline until now, even for v1.0/v2.0
 # when GPU is used for the season-level odds. Needed so a use_gpu=TRUE,
 # use_dc_sim=FALSE run doesn't fall back to CPU partway through.
-simulate_matches_gpu <- function(remaining_games, team_strengths, n_sims, home_advantage = 0.3) {
+simulate_matches_gpu <- function(
+  remaining_games,
+  team_strengths,
+  n_sims,
+  home_advantage = 0.3
+) {
   if (!torch::cuda_is_available()) {
     stop(
       "CUDA not available — use simulate_matches_vectorized() for CPU execution."
@@ -2692,19 +3102,48 @@ simulate_matches_gpu <- function(remaining_games, team_strengths, n_sims, home_a
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, team_strengths$team)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, team_strengths$team)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
 
   # See simulate_matches_dc() -- same overflow safety cap, not a modeling choice.
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
-  home_rates_t <- torch::torch_tensor(home_xg, dtype = torch::torch_float32(), device = "cuda")
-  away_rates_t <- torch::torch_tensor(away_xg, dtype = torch::torch_float32(), device = "cuda")
-  home_rates_2d <- home_rates_t$unsqueeze(1L)$expand(c(n_sims, n_games))$contiguous()
-  away_rates_2d <- away_rates_t$unsqueeze(1L)$expand(c(n_sims, n_games))$contiguous()
+  home_rates_t <- torch::torch_tensor(
+    home_xg,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
+  away_rates_t <- torch::torch_tensor(
+    away_xg,
+    dtype = torch::torch_float32(),
+    device = "cuda"
+  )
+  home_rates_2d <- home_rates_t$unsqueeze(1L)$expand(c(
+    n_sims,
+    n_games
+  ))$contiguous()
+  away_rates_2d <- away_rates_t$unsqueeze(1L)$expand(c(
+    n_sims,
+    n_games
+  ))$contiguous()
   rm(home_rates_t, away_rates_t)
 
   h_goals_t <- torch::torch_poisson(home_rates_2d)
@@ -2752,12 +3191,27 @@ simulate_matches_gpu_dc <- function(
   raw_avg <- mean(team_strengths$attack_strength, na.rm = TRUE)
   league_avg <- if (is.na(raw_avg) || raw_avg < 0.1) 1.3 else raw_avg
 
-  home_attack <- team_strengths$attack_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  home_defense <- team_strengths$defense_strength[match(remaining_games$home_team_id, team_strengths$team)]
-  away_attack <- team_strengths$attack_strength[match(remaining_games$away_team_id, team_strengths$team)]
-  away_defense <- team_strengths$defense_strength[match(remaining_games$away_team_id, team_strengths$team)]
+  home_attack <- team_strengths$attack_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  home_defense <- team_strengths$defense_strength[match(
+    remaining_games$home_team_id,
+    team_strengths$team
+  )]
+  away_attack <- team_strengths$attack_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
+  away_defense <- team_strengths$defense_strength[match(
+    remaining_games$away_team_id,
+    team_strengths$team
+  )]
 
-  home_xg <- pmin(pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage), 15)
+  home_xg <- pmin(
+    pmax(0.01, (home_attack * away_defense / league_avg) + home_advantage),
+    15
+  )
   away_xg <- pmin(pmax(0.01, (away_attack * home_defense / league_avg)), 15)
 
   h_range <- 0:max_goals
@@ -2771,12 +3225,27 @@ simulate_matches_gpu_dc <- function(
     mu <- away_xg[g]
 
     p <- outer(h_range, a_range, function(h, a) dpois(h, lambda) * dpois(a, mu))
-    tau_adj <- outer(h_range, a_range, dc_tau, lambda = lambda, mu = mu, rho = rho)
+    tau_adj <- outer(
+      h_range,
+      a_range,
+      dc_tau,
+      lambda = lambda,
+      mu = mu,
+      rho = rho
+    )
     p <- pmax(p * tau_adj, 0)
     p <- p / sum(p)
 
-    probs_t <- torch::torch_tensor(as.vector(p), dtype = torch::torch_float32(), device = "cuda")
-    idx <- as.array(torch::torch_multinomial(probs_t, num_samples = n_sims, replacement = TRUE)$cpu())
+    probs_t <- torch::torch_tensor(
+      as.vector(p),
+      dtype = torch::torch_float32(),
+      device = "cuda"
+    )
+    idx <- as.array(torch::torch_multinomial(
+      probs_t,
+      num_samples = n_sims,
+      replacement = TRUE
+    )$cpu())
 
     h_goals[, g] <- h_range[((idx - 1) %% (max_goals + 1)) + 1]
     a_goals[, g] <- a_range[((idx - 1) %/% (max_goals + 1)) + 1]
@@ -2817,18 +3286,26 @@ validate_gpu_vs_cpu <- function(
   # for why an uncompleted strengths/current_standings pair can silently
   # produce NA for any team with 0 games played as of this cutoff.
   all_team_ids <- unique(c(
-    played$home_team_id, played$away_team_id,
-    remaining$home_team_id, remaining$away_team_id
+    played$home_team_id,
+    played$away_team_id,
+    remaining$home_team_id,
+    remaining$away_team_id
   ))
 
   strengths_raw <- calculate_team_strengths(played)
   l_avg <- mean(strengths_raw$attack_strength, na.rm = TRUE)
-  if (is.na(l_avg) || l_avg < 0.1) l_avg <- 1.3
+  if (is.na(l_avg) || l_avg < 0.1) {
+    l_avg <- 1.3
+  }
   strengths <- tibble(team = all_team_ids) |>
     left_join(strengths_raw, by = "team") |>
     mutate(
       attack_strength = if_else(is.na(attack_strength), l_avg, attack_strength),
-      defense_strength = if_else(is.na(defense_strength), l_avg, defense_strength)
+      defense_strength = if_else(
+        is.na(defense_strength),
+        l_avg,
+        defense_strength
+      )
     )
 
   current_standings <- tibble(team = all_team_ids) |>
@@ -2926,18 +3403,26 @@ validate_gpu_dc_vs_cpu <- function(
   # cutoff would otherwise be missing entirely, producing NA attack/defense
   # (and downstream NA probabilities in sample.int()) for its remaining games.
   all_team_ids <- unique(c(
-    played$home_team_id, played$away_team_id,
-    remaining$home_team_id, remaining$away_team_id
+    played$home_team_id,
+    played$away_team_id,
+    remaining$home_team_id,
+    remaining$away_team_id
   ))
 
   strengths_raw <- fit_team_strengths_dc(played, xi = xi)
   l_avg <- mean(strengths_raw$attack_strength, na.rm = TRUE)
-  if (is.na(l_avg) || l_avg < 0.1) l_avg <- 1.3
+  if (is.na(l_avg) || l_avg < 0.1) {
+    l_avg <- 1.3
+  }
   strengths <- tibble(team = all_team_ids) |>
     left_join(strengths_raw, by = "team") |>
     mutate(
       attack_strength = if_else(is.na(attack_strength), l_avg, attack_strength),
-      defense_strength = if_else(is.na(defense_strength), l_avg, defense_strength)
+      defense_strength = if_else(
+        is.na(defense_strength),
+        l_avg,
+        defense_strength
+      )
     )
 
   current_standings <- tibble(team = all_team_ids) |>
@@ -2946,12 +3431,20 @@ validate_gpu_dc_vs_cpu <- function(
         played |>
           transmute(
             team = home_team_id,
-            pts = if_else(home_goals > away_goals, 3L, if_else(home_goals == away_goals, 1L, 0L))
+            pts = if_else(
+              home_goals > away_goals,
+              3L,
+              if_else(home_goals == away_goals, 1L, 0L)
+            )
           ),
         played |>
           transmute(
             team = away_team_id,
-            pts = if_else(away_goals > home_goals, 3L, if_else(home_goals == away_goals, 1L, 0L))
+            pts = if_else(
+              away_goals > home_goals,
+              3L,
+              if_else(home_goals == away_goals, 1L, 0L)
+            )
           )
       ) |>
         group_by(team) |>
@@ -2962,53 +3455,94 @@ validate_gpu_dc_vs_cpu <- function(
 
   message("Running CPU (simulate_season_dc)...")
   cpu_res <- simulate_season_dc(
-    current_standings, remaining, strengths, n_sims,
-    home_advantage = home_advantage, rho = rho, qualify_top_n = qualify_top_n
+    current_standings,
+    remaining,
+    strengths,
+    n_sims,
+    home_advantage = home_advantage,
+    rho = rho,
+    qualify_top_n = qualify_top_n
   )
   message("Running GPU (simulate_season_gpu_dc)...")
   gpu_res <- simulate_season_gpu_dc(
-    current_standings, remaining, strengths, n_sims,
-    home_advantage = home_advantage, rho = rho, qualify_top_n = qualify_top_n
+    current_standings,
+    remaining,
+    strengths,
+    n_sims,
+    home_advantage = home_advantage,
+    rho = rho,
+    qualify_top_n = qualify_top_n
   )
 
   cpu_odds <- as_tibble(cpu_res) |>
-    group_by(team) |> summarize(cpu_pct = mean(made_playoffs) * 100, .groups = "drop")
+    group_by(team) |>
+    summarize(cpu_pct = mean(made_playoffs) * 100, .groups = "drop")
   gpu_odds <- as_tibble(gpu_res) |>
-    group_by(team) |> summarize(gpu_pct = mean(made_playoffs) * 100, .groups = "drop")
+    group_by(team) |>
+    summarize(gpu_pct = mean(made_playoffs) * 100, .groups = "drop")
 
   odds_comparison <- inner_join(cpu_odds, gpu_odds, by = "team") |>
     mutate(diff = abs(cpu_pct - gpu_pct))
 
-  message(sprintf("Max absolute diff in playoff_pct: %.3f%%", max(odds_comparison$diff)))
-  message(sprintf("Mean absolute diff:                %.3f%%", mean(odds_comparison$diff)))
+  message(sprintf(
+    "Max absolute diff in playoff_pct: %.3f%%",
+    max(odds_comparison$diff)
+  ))
+  message(sprintf(
+    "Mean absolute diff:                %.3f%%",
+    mean(odds_comparison$diff)
+  ))
   message("PASS threshold: max diff < 1.0%% at n_sims = 100K")
 
   # Scoreline-cell-level check: the tau correction's whole job is shifting
   # 0-0/1-0/0-1/1-1 probabilities relative to independent Poisson -- verify
   # GPU reproduces that shift, not just that the aggregate odds land close.
-  message("\nRunning CPU/GPU match-level simulation for scoreline comparison...")
-  cpu_matches <- simulate_matches_dc(remaining, strengths, n_sims, home_advantage = home_advantage, rho = rho)
-  gpu_matches <- simulate_matches_gpu_dc(remaining, strengths, n_sims, home_advantage = home_advantage, rho = rho)
+  message(
+    "\nRunning CPU/GPU match-level simulation for scoreline comparison..."
+  )
+  cpu_matches <- simulate_matches_dc(
+    remaining,
+    strengths,
+    n_sims,
+    home_advantage = home_advantage,
+    rho = rho
+  )
+  gpu_matches <- simulate_matches_gpu_dc(
+    remaining,
+    strengths,
+    n_sims,
+    home_advantage = home_advantage,
+    rho = rho
+  )
 
   cell_pct <- function(match_results, hg, ag) {
     as_tibble(match_results) |>
       group_by(match_id) |>
-      summarize(pct = mean(home_goals == hg & away_goals == ag) * 100, .groups = "drop")
+      summarize(
+        pct = mean(home_goals == hg & away_goals == ag) * 100,
+        .groups = "drop"
+      )
   }
 
   scoreline_comparison <- purrr::map_dfr(
     list(c(0, 0), c(1, 0), c(0, 1), c(1, 1)),
     function(cell) {
-      cpu_cell <- cell_pct(cpu_matches, cell[1], cell[2]) |> rename(cpu_pct = pct)
-      gpu_cell <- cell_pct(gpu_matches, cell[1], cell[2]) |> rename(gpu_pct = pct)
+      cpu_cell <- cell_pct(cpu_matches, cell[1], cell[2]) |>
+        rename(cpu_pct = pct)
+      gpu_cell <- cell_pct(gpu_matches, cell[1], cell[2]) |>
+        rename(gpu_pct = pct)
       inner_join(cpu_cell, gpu_cell, by = "match_id") |>
-        mutate(scoreline = sprintf("%d-%d", cell[1], cell[2]), diff = abs(cpu_pct - gpu_pct))
+        mutate(
+          scoreline = sprintf("%d-%d", cell[1], cell[2]),
+          diff = abs(cpu_pct - gpu_pct)
+        )
     }
   )
 
   message(sprintf(
     "\nScoreline cell agreement (0-0/1-0/0-1/1-1), max diff: %.3f%%, mean diff: %.3f%%",
-    max(scoreline_comparison$diff), mean(scoreline_comparison$diff)
+    max(scoreline_comparison$diff),
+    mean(scoreline_comparison$diff)
   ))
 
   list(odds = odds_comparison, scorelines = scoreline_comparison)
