@@ -742,6 +742,16 @@ diagnose_dc_tau <- function(
 # Point-in-time correctness: `seasons` must be in chronological order.
 # Any season strictly before `current_season` is a completed season and is
 # pooled in full (its outcome was always fully known by the time
+# ASA's client errors internally (inside its own dplyr::arrange(date_time_utc))
+# when a season string isn't in its data at all, rather than returning an
+# empty-but-well-formed result -- this is indistinguishable at the R level
+# from other transient fetch failures (network blip, ASA outage) except by
+# this specific "column not found" signature, so callers use this to give a
+# much more actionable message than a generic "couldn't fetch" would.
+is_unrecognized_season_error <- function(e) {
+  grepl("date_time_utc", conditionMessage(e), fixed = TRUE)
+}
+
 # `current_season` started). `current_season` itself is truncated to
 # `date <= cutoff_date` -- otherwise a backfilled snapshot from, say,
 # gameweek 1 would be fit using rho/home_advantage informed by that same
@@ -780,11 +790,18 @@ fit_pooled_league_params <- function(
           date = as.Date(date_time_utc)
         ),
       error = function(e) {
-        message(sprintf(
-          "fit_pooled_league_params: couldn't fetch season %s (%s) -- skipping.",
-          season,
-          conditionMessage(e)
-        ))
+        if (is_unrecognized_season_error(e)) {
+          message(sprintf(
+            "fit_pooled_league_params: season '%s' isn't recognized by ASA (check it matches ASA's exact season label, e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)) -- skipping.",
+            season
+          ))
+        } else {
+          message(sprintf(
+            "fit_pooled_league_params: couldn't fetch season %s (%s) -- skipping.",
+            season,
+            conditionMessage(e)
+          ))
+        }
         # Properly shaped (0-row, not 0-column) so downstream nrow()/$date/
         # filter(date <= ...) degrade to "no games" gracefully instead of
         # crashing -- a bare tibble() has no columns at all, so filter()'s
@@ -1412,11 +1429,23 @@ calculate_playoff_odds_fast <- function(
       # played so far" rather than crashing the whole run. The rest of the
       # pipeline already handles that gracefully: team_strengths_complete
       # defaults every team to league-average via its left_join, and every
-      # scheduled game just falls out as "remaining".
-      message(sprintf(
-        "  Couldn't fetch ASA data for season %s (%s) -- treating as 0 games played so far.",
-        season, conditionMessage(e)
-      ))
+      # scheduled game just falls out as "remaining". If the season string
+      # itself isn't recognized by ASA at all (as opposed to a recognized
+      # season with genuinely zero games so far), say so explicitly --
+      # otherwise this looks identical to "too early in a valid season" and
+      # silently produces a season-long simulation for a season that ASA has
+      # no record of at all.
+      if (is_unrecognized_season_error(e)) {
+        message(sprintf(
+          "  Season '%s' isn't recognized by ASA (check it matches ASA's exact season label, e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)) -- treating as 0 games played so far.",
+          season
+        ))
+      } else {
+        message(sprintf(
+          "  Couldn't fetch ASA data for season %s (%s) -- treating as 0 games played so far.",
+          season, conditionMessage(e)
+        ))
+      }
       tibble(
         home_team_id = character(), away_team_id = character(),
         home_score = numeric(), away_score = numeric(),

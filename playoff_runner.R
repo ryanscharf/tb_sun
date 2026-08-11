@@ -191,12 +191,21 @@ for (mv_row in seq_len(nrow(model_versions_df))) {
   cutoff_dist <- output$cutoff_dist
 
   if (is.null(gameweek_id)) {
+    # max(played_games$date) on 0 rows returns -Inf (with a warning), which
+    # then fails as a literal SQL date string below -- a season with no
+    # games played yet (e.g. before its first game, or ASA not having data
+    # for it yet) has no "most recent played date" to anchor gameweek 1 to,
+    # so fall back to today as the baseline snapshot date instead.
+    current_week_end <- if (nrow(played_games) > 0) {
+      max(played_games$date)
+    } else {
+      Sys.Date()
+    }
     current_week_start <- floor_date(
-      max(played_games$date),
+      current_week_end,
       unit = "week",
       week_start = 1
     )
-    current_week_end <- max(played_games$date)
     # Scoped to the current season -- gameweek_number resets to 1 each new
     # season rather than counting up forever across all of them.
     current_gw_number <- as.integer(
