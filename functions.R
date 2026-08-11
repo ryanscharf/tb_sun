@@ -1424,33 +1424,25 @@ calculate_playoff_odds_fast <- function(
       mutate(date_only = as.Date(date_time_utc)) %>%
       as_tibble(),
     error = function(e) {
-      # ASA has no data for this season yet (e.g. before the season's first
-      # game has been played/scheduled in their system) -- treat as "0 games
-      # played so far" rather than crashing the whole run. The rest of the
-      # pipeline already handles that gracefully: team_strengths_complete
-      # defaults every team to league-average via its left_join, and every
-      # scheduled game just falls out as "remaining". If the season string
-      # itself isn't recognized by ASA at all (as opposed to a recognized
-      # season with genuinely zero games so far), say so explicitly --
-      # otherwise this looks identical to "too early in a valid season" and
-      # silently produces a season-long simulation for a season that ASA has
-      # no record of at all.
+      # Fail loudly and halt the whole run rather than silently computing
+      # (and writing to the DB) a "0 games played" simulation for every
+      # active preset -- that output is indistinguishable from a real
+      # early-season snapshot unless someone happens to notice
+      # games_played = 0, so an operator should see this fail instead of it
+      # quietly succeeding with garbage. calculate_playoff_odds_fast() isn't
+      # wrapped in its own tryCatch anywhere it's called, so this stop()
+      # propagates all the way up and exits the script non-zero.
       if (is_unrecognized_season_error(e)) {
-        message(sprintf(
-          "  Season '%s' isn't recognized by ASA (check it matches ASA's exact season label, e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)) -- treating as 0 games played so far.",
+        stop(sprintf(
+          "Season '%s' isn't recognized by ASA -- check it matches ASA's exact season label (e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)).",
           season
-        ))
+        ), call. = FALSE)
       } else {
-        message(sprintf(
-          "  Couldn't fetch ASA data for season %s (%s) -- treating as 0 games played so far.",
+        stop(sprintf(
+          "Couldn't fetch ASA data for season %s: %s",
           season, conditionMessage(e)
-        ))
+        ), call. = FALSE)
       }
-      tibble(
-        home_team_id = character(), away_team_id = character(),
-        home_score = numeric(), away_score = numeric(),
-        status = character(), date_only = as.Date(character())
-      )
     }
   )
 
