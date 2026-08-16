@@ -2490,6 +2490,66 @@ plot_elo_trends <- function(elo_history) {
     )
 }
 
+# Cross-season analog of plot_elo_trends() -- x-axis is the real calendar
+# date rather than per-season gameweek_number (which resets to 1 each
+# season, so isn't meaningfully continuous across them). Dotted vertical
+# lines mark each season boundary; the line is intentionally NOT broken by
+# season (single `group` per team) so the regress_elo_to_mean() jump at each
+# boundary shows up as a visible discontinuity rather than being hidden.
+plot_elo_trends_all_seasons <- function(elo_history) {
+  team_levels <- elo_history %>%
+    distinct(team_abbreviation) %>%
+    pull(team_abbreviation)
+
+  color_map <- deframe(select(usl_sl_team_brands, team_abbreviation, primary))
+
+  season_boundaries <- elo_history %>%
+    distinct(season, gameweek_date) %>%
+    group_by(season) %>%
+    summarise(start = min(gameweek_date), .groups = "drop") %>%
+    arrange(start) %>%
+    slice(-1) %>%
+    pull(start)
+
+  elo_history %>%
+    mutate(
+      team_abbreviation = factor(team_abbreviation, levels = team_levels)
+    ) %>%
+    ggplot(aes(
+      x = gameweek_date,
+      y = elo_rating,
+      color = team_abbreviation,
+      group = team_abbreviation
+    )) +
+    geom_vline(
+      xintercept = season_boundaries,
+      linetype = "dotted",
+      color = "gray60"
+    ) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1) +
+    geom_hline(
+      yintercept = 1500,
+      linetype = "dashed",
+      color = "gray50",
+      alpha = 0.7
+    ) +
+    scale_color_manual(values = color_map) +
+    labs(
+      title = "Elo Rating Over Time (All Seasons)",
+      subtitle = "1500 = league average at initialization | dotted lines mark season boundaries",
+      x = NULL,
+      y = "Elo Rating",
+      color = NULL
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+}
+
 table_elo_leaderboard <- function(current_elo) {
   current_elo %>%
     arrange(desc(elo_rating)) %>%

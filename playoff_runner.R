@@ -111,21 +111,24 @@ if (nrow(model_versions_df) == 0) {
 # completed USL SL season, rather than fit fresh from a single thin season
 # each time -- see fit_pooled_league_params() for why these are treated
 # differently from attack/defense given the league's heavy YoY roster
-# turnover. Add each newly completed season's label as it becomes available;
-# this degrades gracefully to a single-season fit until then.
+# turnover.
 #
-# POOLED_SEASONS must be in chronological order, ending with CURRENT_SEASON
-# -- fit_pooled_league_params() truncates CURRENT_SEASON's own games to
-# "as of today" (point-in-time correctness) and pools any earlier season in
-# full, so this run never has visibility into results that haven't happened
-# yet (matters more for backfill_runner.R's historical cutoffs than here,
-# since "today" naturally has no future games to leak in live -- but it also
-# guards against POOLED_SEASONS accidentally listing a season that hasn't
-# started yet).
-POOLED_SEASONS <- trimws(strsplit(
-  Sys.getenv("POOLED_SEASONS", CURRENT_SEASON),
-  ","
-)[[1]])
+# POOLED_SEASONS is derived from `gameweeks` (chronological order, ending
+# with CURRENT_SEASON) rather than hand-declared via env var -- a season only
+# shows up here once this script has actually written a gameweeks row for it,
+# so the list grows on its own as seasons complete instead of needing to be
+# remembered at each rollover. `gameweeks` won't have a row for CURRENT_SEASON
+# yet on its very first run (that row is inserted further down), so it's
+# appended explicitly; if this is the very first run ever (no gameweeks rows
+# at all), this degrades gracefully to a single-season fit, same as before.
+# fit_pooled_league_params() truncates CURRENT_SEASON's own games to "as of
+# today" (point-in-time correctness) and pools any earlier season in full, so
+# this run never has visibility into results that haven't happened yet.
+historical_seasons <- dbGetQuery(
+  con,
+  "SELECT season FROM gameweeks GROUP BY season ORDER BY MIN(start_date)"
+)$season
+POOLED_SEASONS <- c(setdiff(historical_seasons, CURRENT_SEASON), CURRENT_SEASON)
 
 needs_league_params <- any(vapply(
   seq_len(nrow(model_versions_df)),

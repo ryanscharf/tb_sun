@@ -108,6 +108,35 @@ get_elo_data <- function(season, gameweek_number) {
   list(history = history, current = current)
 }
 
+# Same shape as get_elo_data() but across every season -- no gameweek_number
+# cap since "as of now" across all history is just the latest row per team,
+# and gameweek_number itself isn't meaningful across seasons (resets to 1
+# each season, unlike gameweek_date which is a real, continuously ordered
+# calendar date).
+get_elo_data_all_seasons <- function() {
+  con <- get_db_conn()
+  on.exit(dbDisconnect(con))
+
+  history <- dbGetQuery(
+    con,
+    "
+    SELECT er.team_id, er.team_name, er.team_abbreviation,
+           er.elo_rating, er.games_played, er.season,
+           gw.gameweek_number, gw.end_date AS gameweek_date
+    FROM elo_ratings er
+    JOIN gameweeks gw ON er.gameweek_id = gw.gameweek_id
+    ORDER BY gw.end_date, er.team_abbreviation
+  "
+  )
+
+  current <- history %>%
+    group_by(team_id) %>%
+    filter(gameweek_date == max(gameweek_date)) %>%
+    ungroup()
+
+  list(history = history, current = current)
+}
+
 load_db_data <- function(model_version_id, season, gameweek_number) {
   con <- get_db_conn()
   on.exit(dbDisconnect(con))
@@ -380,6 +409,11 @@ ui <- page_sidebar(
     nav_panel("Playoff Line", plotOutput("cutoff_dist_plot", height = "500px")),
     nav_panel(
       "Team Ratings",
+      checkboxInput(
+        "elo_all_seasons",
+        "Show all seasons",
+        value = TRUE
+      ),
       plotOutput("elo_trends_plot", height = "500px"),
       hr(),
       tableOutput("elo_leaderboard_table")
@@ -470,23 +504,35 @@ server <- function(input, output, session) {
   })
 
   # Elo has no model_version dimension -- loaded independently of the
-  # model_version-driven cascade above, keyed only on season/gameweek.
+  # model_version-driven cascade above. Defaults to the full cross-season
+  # trajectory (elo_all_seasons = TRUE) since Elo, unlike the simulation
+  # tabs, is a continuous historical tracker rather than a per-season
+  # snapshot -- season/gameweek only come into play when the toggle is off.
+  # Reading input$season/input$gameweek only inside the FALSE branch means
+  # Shiny doesn't register a dependency on them while showing all seasons,
+  # so toggling doesn't refetch on every unrelated season/gameweek change.
   elo_data <- reactiveVal(NULL)
 
-  observe({
-    req(input$season, input$gameweek)
-    elo_data(get_elo_data(input$season, input$gameweek))
-  })
+  load_elo <- function() {
+    if (isTRUE(input$elo_all_seasons)) {
+      elo_data(get_elo_data_all_seasons())
+    } else {
+      req(input$season, input$gameweek)
+      elo_data(get_elo_data(input$season, input$gameweek))
+    }
+  }
 
-  observeEvent(input$refresh, {
-    req(input$season, input$gameweek)
-    elo_data(get_elo_data(input$season, input$gameweek))
-  })
+  observe(load_elo())
+  observeEvent(input$refresh, load_elo())
 
   output$elo_trends_plot <- renderPlot({
     d <- elo_data()
     req(nrow(d$history) > 0)
-    plot_elo_trends(d$history)
+    if (isTRUE(input$elo_all_seasons)) {
+      plot_elo_trends_all_seasons(d$history)
+    } else {
+      plot_elo_trends(d$history)
+    }
   })
 
   output$elo_leaderboard_table <- renderTable(
