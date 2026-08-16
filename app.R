@@ -100,10 +100,7 @@ get_elo_data <- function(season, gameweek_number) {
     )
   )
 
-  current <- history %>%
-    group_by(team_id) %>%
-    filter(gameweek_number == max(gameweek_number)) %>%
-    ungroup()
+  current <- elo_current_with_change(history, "gameweek_number")
 
   list(history = history, current = current)
 }
@@ -129,10 +126,7 @@ get_elo_data_all_seasons <- function() {
   "
   )
 
-  current <- history %>%
-    group_by(team_id) %>%
-    filter(gameweek_date == max(gameweek_date)) %>%
-    ungroup()
+  current <- elo_current_with_change(history, "gameweek_date")
 
   list(history = history, current = current)
 }

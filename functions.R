@@ -2550,6 +2550,23 @@ plot_elo_trends_all_seasons <- function(elo_history) {
     )
 }
 
+# Extracts each team's most recent Elo rating from history (long format, one
+# row per team per update, ordered by `order_col`) along with the change from
+# their prior recorded rating. A team's first-ever recorded rating has no
+# prior update to diff against, so elo_change is NA for it. `history` is
+# expected to already be scoped to whatever window the caller wants "last
+# update" to mean -- e.g. get_elo_data()'s per-season/gameweek-capped history
+# vs get_elo_data_all_seasons()'s full cross-season history -- since this
+# function itself doesn't know or care about season boundaries.
+elo_current_with_change <- function(history, order_col) {
+  history %>%
+    group_by(team_id) %>%
+    arrange(.data[[order_col]], .by_group = TRUE) %>%
+    mutate(elo_change = elo_rating - lag(elo_rating)) %>%
+    slice_tail(n = 1) %>%
+    ungroup()
+}
+
 table_elo_leaderboard <- function(current_elo) {
   current_elo %>%
     arrange(desc(elo_rating)) %>%
@@ -2558,7 +2575,11 @@ table_elo_leaderboard <- function(current_elo) {
       Rank = rank,
       Team = team_name,
       Elo = sprintf("%.0f", elo_rating),
-      `Games Played` = games_played
+      Change = if_else(
+        is.na(elo_change),
+        "New",
+        sprintf("%+.0f", elo_change)
+      )
     )
 }
 
