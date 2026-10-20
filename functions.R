@@ -2730,6 +2730,7 @@ table_attendance_leaderboard <- function(attendance) {
     summarise(
       games = n(),
       avg = mean(attendance),
+      sd = sd(attendance),
       last = last(attendance),
       .groups = "drop"
     ) %>%
@@ -2739,6 +2740,8 @@ table_attendance_leaderboard <- function(attendance) {
       Team = team_name,
       `Home Games` = games,
       `Avg Attendance` = scales::comma(avg, accuracy = 1),
+      # sd() is NA for a single recorded game
+      `Std Dev` = if_else(is.na(sd), "—", scales::comma(sd, accuracy = 1)),
       `Last Game` = scales::comma(last)
     )
 }
