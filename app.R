@@ -411,6 +411,17 @@ ui <- page_sidebar(
       plotOutput("elo_trends_plot", height = "500px"),
       hr(),
       tableOutput("elo_leaderboard_table")
+    ),
+    nav_panel(
+      "Attendance",
+      checkboxInput(
+        "attendance_all_seasons",
+        "Show all seasons",
+        value = TRUE
+      ),
+      plotOutput("attendance_plot", height = "500px", fill = FALSE),
+      hr(),
+      tableOutput("attendance_table")
     )
   )
 )
@@ -419,6 +430,18 @@ ui <- page_sidebar(
 server <- function(input, output, session) {
   model_versions <- get_model_versions()
   data <- reactiveVal(NULL)
+
+  # Cache key for every exhibit built from a simulation run. A run's rows are
+  # written once under a fresh serial run_id and never edited, so the id alone
+  # identifies the content: when the runner writes a new run (or a different
+  # model/season/gameweek is selected) the id changes and the exhibit is
+  # rebuilt; otherwise the cached render is reused. Nothing to invalidate by
+  # hand -- stale entries simply stop being looked up and age out of the LRU.
+  run_key <- reactive({
+    d <- req(data())
+    req(nrow(d$run) > 0)
+    d$run$run_id
+  })
 
   observe({
     req(nrow(model_versions) > 0)
@@ -522,12 +545,16 @@ server <- function(input, output, session) {
   output$elo_trends_plot <- renderPlot({
     d <- elo_data()
     req(nrow(d$history) > 0)
-    if (isTRUE(input$elo_all_seasons)) {
+    # Branch on the data's shape, not the checkbox: right after a toggle the
+    # plot re-renders before load_elo() swaps in the matching dataset, and
+    # only the all-seasons query returns a `season` column.
+    if ("season" %in% names(d$history)) {
       plot_elo_trends_all_seasons(d$history)
     } else {
       plot_elo_trends(d$history)
     }
-  })
+  }) |>
+    bindCache(rlang::hash(elo_data()$history))
 
   output$elo_leaderboard_table <- renderTable(
     {
@@ -538,7 +565,45 @@ server <- function(input, output, session) {
     striped = TRUE,
     hover = TRUE,
     bordered = TRUE
-  )
+  ) |>
+    bindCache(rlang::hash(elo_data()$current))
+
+  # Attendance comes from ASA, not the DB, and only changes when games are
+  # played -- fetched once per session (and again on Refresh) rather than on
+  # every toggle. The season-scoped view filters the cached all-seasons data.
+  attendance_data <- reactiveVal(NULL)
+  observe(attendance_data(get_attendance_data()))
+  observeEvent(input$refresh, attendance_data(get_attendance_data()))
+
+  attendance_view <- reactive({
+    d <- attendance_data()
+    req(d, nrow(d) > 0)
+    if (isTRUE(input$attendance_all_seasons)) {
+      d
+    } else {
+      req(input$season)
+      filter(d, season == input$season)
+    }
+  })
+
+  output$attendance_plot <- renderPlot({
+    d <- attendance_view()
+    req(nrow(d) > 0)
+    plot_attendance_trends(d)
+  }) |>
+    bindCache(rlang::hash(attendance_view()))
+
+  output$attendance_table <- renderTable(
+    {
+      d <- attendance_view()
+      req(nrow(d) > 0)
+      table_attendance_leaderboard(d)
+    },
+    striped = TRUE,
+    hover = TRUE,
+    bordered = TRUE
+  ) |>
+    bindCache(rlang::hash(attendance_view()))
 
   output$model_version_description <- renderUI({
     req(input$model_version)
@@ -612,7 +677,8 @@ server <- function(input, output, session) {
     d <- data()
     req(nrow(d$odds) > 0)
     plot_playoff_odds(d$odds, d$run)
-  })
+  }) |>
+    bindCache(run_key())
 
   output$uncertainty_table <- renderTable(
     {
@@ -623,7 +689,8 @@ server <- function(input, output, session) {
     striped = TRUE,
     hover = TRUE,
     bordered = TRUE
-  )
+  ) |>
+    bindCache(run_key())
 
   observeEvent(data(), {
     d <- data()
@@ -657,7 +724,8 @@ server <- function(input, output, session) {
     striped = TRUE,
     hover = TRUE,
     bordered = TRUE
-  )
+  ) |>
+    bindCache(run_key(), input$match_probs_team)
 
   observeEvent(data(), {
     d <- data()
@@ -703,25 +771,29 @@ server <- function(input, output, session) {
     req(nrow(df) > 0)
 
     plot_scoreline_distributions(df, ncol = 1)
-  })
+  }) |>
+    bindCache(run_key(), input$scoreline_match)
 
   output$rank_dist_plot <- renderPlot({
     d <- data()
     req(nrow(d$rank_dist) > 0)
     plot_rank_distributions(d$rank_dist)
-  })
+  }) |>
+    bindCache(run_key())
 
   output$cutoff_dist_plot <- renderPlot({
     d <- data()
     req(nrow(d$cutoff_dist) > 0)
     plot_cutoff_distribution(d$cutoff_dist, d$odds)
-  })
+  }) |>
+    bindCache(run_key())
 
   output$trends_plot <- renderPlot({
     d <- data()
     req(nrow(d$history) > 0)
     plot_trends(d$history)
-  })
+  }) |>
+    bindCache(run_key(), rlang::hash(data()$history))
 }
 
 shinyApp(ui, server)

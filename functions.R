@@ -1433,15 +1433,22 @@ calculate_playoff_odds_fast <- function(
       # wrapped in its own tryCatch anywhere it's called, so this stop()
       # propagates all the way up and exits the script non-zero.
       if (is_unrecognized_season_error(e)) {
-        stop(sprintf(
-          "Season '%s' isn't recognized by ASA -- check it matches ASA's exact season label (e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)).",
-          season
-        ), call. = FALSE)
+        stop(
+          sprintf(
+            "Season '%s' isn't recognized by ASA -- check it matches ASA's exact season label (e.g. via asa_client$get_games(leagues='usls') and inspecting unique(season_name)).",
+            season
+          ),
+          call. = FALSE
+        )
       } else {
-        stop(sprintf(
-          "Couldn't fetch ASA data for season %s: %s",
-          season, conditionMessage(e)
-        ), call. = FALSE)
+        stop(
+          sprintf(
+            "Couldn't fetch ASA data for season %s: %s",
+            season,
+            conditionMessage(e)
+          ),
+          call. = FALSE
+        )
       }
     }
   )
@@ -2580,6 +2587,159 @@ table_elo_leaderboard <- function(current_elo) {
         "New",
         sprintf("%+.0f", elo_change)
       )
+    )
+}
+
+# Home-game attendance straight from ASA (the DB doesn't store it) -- one row
+# per completed home game with a reported (> 0) crowd. Returns an empty
+# tibble rather than erroring if ASA is unreachable so the tab degrades to
+# "no data" instead of taking the whole app down.
+get_attendance_data <- function() {
+  tryCatch(
+    {
+      asa_client <- AmericanSoccerAnalysis$new()
+      teams <- suppressMessages(asa_client$get_teams(leagues = "usls")) %>%
+        as_tibble() %>%
+        select(team_id, team_name, team_abbreviation)
+
+      suppressMessages(asa_client$get_games(leagues = "usls")) %>%
+        as_tibble() %>%
+        filter(status == "FullTime") %>%
+        inner_join(teams, by = c("home_team_id" = "team_id")) %>%
+        transmute(
+          team_abbreviation,
+          team_name,
+          season = season_name,
+          game_date = as.Date(date_time_utc),
+          # ASA reports unrecorded crowds as NA or 0 -- keep those games
+          # (flagged) so the plot can mark where they fall.
+          missing = is.na(attendance) | attendance <= 0,
+          attendance = if_else(missing, NA_real_, as.numeric(attendance))
+        ) %>%
+        arrange(game_date, team_abbreviation)
+    },
+    error = function(e) {
+      warning("get_attendance_data failed: ", conditionMessage(e))
+      tibble(
+        team_abbreviation = character(),
+        team_name = character(),
+        season = character(),
+        game_date = as.Date(character()),
+        missing = logical(),
+        attendance = numeric()
+      )
+    }
+  )
+}
+
+# Cross-season analog follows plot_elo_trends_all_seasons(): real calendar
+# date on x, dotted vertical lines at season boundaries. Pass a single
+# season's rows for the per-season view (no boundaries are drawn then).
+plot_attendance_trends <- function(attendance) {
+  team_levels <- attendance %>%
+    distinct(team_abbreviation) %>%
+    pull(team_abbreviation)
+
+  color_map <- deframe(select(usl_sl_team_brands, team_abbreviation, primary))
+
+  season_boundaries <- attendance %>%
+    group_by(season) %>%
+    summarise(start = min(game_date), .groups = "drop") %>%
+    arrange(start) %>%
+    slice(-1) %>%
+    pull(start)
+
+  attendance <- attendance %>%
+    mutate(
+      team_abbreviation = factor(team_abbreviation, levels = team_levels)
+    )
+
+  recorded <- filter(attendance, !missing)
+
+  # Place each unrecorded game on its team's line (linear in date between
+  # the neighbouring recorded games). Games before a team's first or after
+  # its last recorded crowd have nothing to interpolate between, so they're
+  # left off rather than extrapolated.
+  unrecorded <- filter(attendance, missing)
+  interpolated <- map(as.character(team_levels), function(abbr) {
+    known <- recorded[as.character(recorded$team_abbreviation) == abbr, ]
+    gaps <- unrecorded[as.character(unrecorded$team_abbreviation) == abbr, ]
+    if (nrow(known) < 2 || nrow(gaps) == 0) {
+      return(gaps[0, ])
+    }
+    gaps$attendance <- approx(
+      as.numeric(known$game_date),
+      known$attendance,
+      xout = as.numeric(gaps$game_date),
+      rule = 1,
+      ties = mean
+    )$y
+    gaps[!is.na(gaps$attendance), ]
+  }) %>%
+    list_rbind()
+
+  ggplot(
+    recorded,
+    aes(
+      x = game_date,
+      y = attendance,
+      color = team_abbreviation,
+      group = team_abbreviation
+    )
+  ) +
+    list(
+      if (length(season_boundaries) > 0) {
+        geom_vline(
+          xintercept = season_boundaries,
+          linetype = "dotted",
+          color = "gray60"
+        )
+      }
+    ) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.5) +
+    geom_point(
+      data = interpolated,
+      shape = 21,
+      fill = "white",
+      size = 2,
+      stroke = 1,
+      show.legend = FALSE
+    ) +
+    scale_y_continuous(labels = scales::comma) +
+    scale_color_manual(values = color_map) +
+    labs(
+      title = "Reported Home Attendance Over Time",
+      subtitle = "One point per home game | open dots = no attendance recorded | dotted lines mark season boundaries",
+      x = NULL,
+      y = "Attendance",
+      color = NULL
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+}
+
+table_attendance_leaderboard <- function(attendance) {
+  attendance %>%
+    filter(!missing) %>%
+    group_by(team_name) %>%
+    summarise(
+      games = n(),
+      avg = mean(attendance),
+      last = last(attendance),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(avg)) %>%
+    transmute(
+      Rank = row_number(),
+      Team = team_name,
+      `Home Games` = games,
+      `Avg Attendance` = scales::comma(avg, accuracy = 1),
+      `Last Game` = scales::comma(last)
     )
 }
 
