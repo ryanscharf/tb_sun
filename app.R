@@ -408,7 +408,7 @@ ui <- page_sidebar(
         "Show all seasons",
         value = TRUE
       ),
-      plotOutput("elo_trends_plot", height = "500px"),
+      plotOutput("elo_trends_plot", height = "500px", fill = FALSE),
       hr(),
       tableOutput("elo_leaderboard_table")
     ),
