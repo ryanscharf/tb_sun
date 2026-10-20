@@ -2742,6 +2742,7 @@ table_attendance_leaderboard <- function(attendance) {
       `Avg Attendance` = scales::comma(avg, accuracy = 1),
       # sd() is NA for a single recorded game
       `Std Dev` = if_else(is.na(sd), "—", scales::comma(sd, accuracy = 1)),
+      CV = if_else(is.na(sd), "—", scales::percent(sd / avg, accuracy = 1)),
       `Last Game` = scales::comma(last)
     )
 }
